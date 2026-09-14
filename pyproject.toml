@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# MiniLang Compiler Visualizer — tooling configuration
+#
+# Single source of truth for black, ruff and pytest. CI runs exactly the
+# commands documented in the README against exactly this config, so "works
+# on my machine" and "green badge" mean the same thing.
+# ---------------------------------------------------------------------------
+
+[project]
+name = "minilang"
+version = "0.1.0"
+description = "Interactive end-to-end compiler for a custom typed language, with every compilation phase visualised live in the browser."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hardik Ahuja" }]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# ---------------------------------------------------------------------------
+# black — formatting
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  | \.venv
+  | \.git
+  | build
+  | dist
+)/
+'''
+
+# ---------------------------------------------------------------------------
+# ruff — linting
+#
+# Rule selection rationale (this is a graded/portfolio project, so the linter
+# is configured to enforce the stated quality bar, not just catch syntax slips):
+#   E,W   pycodestyle  — baseline style
+#   F     pyflakes     — real bugs: unused names, undefined refs
+#   I     isort        — deterministic import order
+#   N     pep8-naming  — naming consistency
+#   UP    pyupgrade    — modern syntax for the target Python
+#   B     bugbear      — likely-wrong constructs (mutable defaults, etc.)
+#   C4    comprehensions
+#   SIM   simplify     — reduce needless branching
+#   RET   returns      — consistent return style
+#   PTH   pathlib      — no stringly-typed path handling
+#   ARG   unused args
+#   D     pydocstyle   — docstrings on every public module/class/function
+#   ANN   annotations  — type hints everywhere
+#   BLE   blind-except — bans bare `except:` / `except Exception:` catch-alls
+#   T20   no print()   — backend code must use structured logging
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4",
+    "SIM", "RET", "PTH", "ARG", "D", "ANN", "BLE", "T20",
+]
+ignore = [
+    "D203",    # conflicts with D211 (blank line before class docstring)
+    "D213",    # conflicts with D212 (multi-line summary on first line)
+    "ANN401",  # allow `Any` where a JSON payload genuinely is Any
+    "E501",    # line length is black's job, not the linter's
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are allowed to be blunter than library code: no docstring police on
+# every single test case, and asserts/fixtures don't need return annotations.
+"tests/*" = ["D100", "D101", "D102", "D103", "D104", "ANN201", "ANN001"]
+# benchmark.py is a CLI entry point; printing its report to stdout is the point.
+"benchmark.py" = ["T20"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: marks tests that are slower than a unit test (deselect with '-m \"not slow\"')",
+]
