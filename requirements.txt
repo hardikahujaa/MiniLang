@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# MiniLang Compiler Visualizer — runtime dependencies
+#
+# Deliberately tiny. The compiler pipeline itself (lexer, parser, semantic
+# analyser, TAC, optimiser, codegen, VM) is written in pure standard-library
+# Python and has ZERO third-party dependencies. Everything below exists only
+# to serve the HTTP API and the static frontend.
+#
+# The frontend has no dependencies at all: no npm, no bundler, no build step.
+# D3 is vendored into static/lib/ so the demo works with no internet access.
+# ---------------------------------------------------------------------------
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.8,<3.0
