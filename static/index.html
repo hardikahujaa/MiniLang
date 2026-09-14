@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MiniLang &middot; Compiler Visualizer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!--
+    D3 is vendored into static/lib/ rather than loaded from a CDN, so the demo
+    works on a machine with no internet access (plan section 13, risk register).
+  -->
+  <script src="/static/lib/d3.v7.min.js" defer></script>
+  <script src="/static/viz.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark">&lt;/&gt;</span>
+    <div class="brand-text">
+      <h1>MiniLang</h1>
+      <p>Compiler Visualizer</p>
+    </div>
+  </div>
+
+  <div class="header-actions">
+    <span id="status-pill" class="pill pill-idle">idle</span>
+    <button id="btn-compile" class="btn btn-primary" type="button">
+      <span class="btn-icon">&#9654;</span> Compile
+    </button>
+    <button id="btn-run" class="btn" type="button" disabled>Run</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Compilation phases">
+  <button class="tab is-active" role="tab" data-tab="source"    aria-selected="true">
+    <span class="tab-num">1</span> Source
+  </button>
+  <button class="tab" role="tab" data-tab="lexical"      aria-selected="false">
+    <span class="tab-num">2</span> Lexical
+  </button>
+  <button class="tab" role="tab" data-tab="theory"       aria-selected="false">
+    <span class="tab-num">3</span> Parser Theory
+  </button>
+  <button class="tab" role="tab" data-tab="syntax"       aria-selected="false">
+    <span class="tab-num">4</span> Syntax
+  </button>
+  <button class="tab" role="tab" data-tab="semantic"     aria-selected="false">
+    <span class="tab-num">5</span> Semantic
+  </button>
+  <button class="tab" role="tab" data-tab="icg"          aria-selected="false">
+    <span class="tab-num">6</span> ICG
+  </button>
+  <button class="tab" role="tab" data-tab="optimization" aria-selected="false">
+    <span class="tab-num">7</span> Optimization
+  </button>
+  <button class="tab" role="tab" data-tab="target"       aria-selected="false">
+    <span class="tab-num">8</span> Target
+  </button>
+</nav>
+
+<main class="panels">
+
+  <!-- ============================ 1. SOURCE ============================ -->
+  <section class="panel is-active" id="panel-source" role="tabpanel">
+    <div class="panel-head">
+      <h2>Source</h2>
+      <p class="panel-sub">
+        MiniLang source. Everything on every other tab is derived from this one input.
+      </p>
+    </div>
+    <div class="editor-wrap">
+      <div class="editor-toolbar">
+        <button id="btn-load-demo" class="btn btn-ghost btn-sm" type="button">
+          Load demo program
+        </button>
+        <span class="editor-meta" id="editor-meta">&mdash;</span>
+      </div>
+      <textarea
+        id="source-editor"
+        class="editor"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="func main(): void { ... }"></textarea>
+    </div>
+    <div class="error-list" id="error-list" hidden>
+      <h3>Syntax errors</h3>
+      <div id="error-list-body"></div>
+    </div>
+  </section>
+
+  <!-- ============================ 2. LEXICAL =========================== -->
+  <section class="panel" id="panel-lexical" role="tabpanel">
+    <div class="panel-head">
+      <h2>Lexical Analysis</h2>
+      <p class="panel-sub">Token stream produced by the hand-written scanner.</p>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 2">
+      <p>Token table renders here: type, lexeme, line, column.</p>
+    </div>
+    <div id="token-table-wrap" hidden></div>
+    <div id="dfa-wrap" hidden></div>
+  </section>
+
+  <!-- ========================= 3. PARSER THEORY ======================== -->
+  <section class="panel" id="panel-theory" role="tabpanel">
+    <div class="panel-head">
+      <h2>Parser Theory Lab</h2>
+      <p class="panel-sub">
+        Paste any context-free grammar &rarr; FIRST/FOLLOW, LL(1), LR(0) items, SLR and
+        LALR tables, with conflicts highlighted.
+      </p>
+    </div>
+    <div class="empty-state" data-step="Tier B &middot; step 8">
+      <p>Grammar input, computed sets and parse tables render here.</p>
+    </div>
+    <div id="theory-wrap" hidden></div>
+  </section>
+
+  <!-- ============================ 4. SYNTAX ============================ -->
+  <section class="panel" id="panel-syntax" role="tabpanel">
+    <div class="panel-head">
+      <h2>Syntax Analysis</h2>
+      <p class="panel-sub">Recursive-descent parse tree, and a step-through trace of the stack.</p>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 3">
+      <p>D3 parse tree and AST render here; step-through animation arrives in Tier B.</p>
+    </div>
+    <div id="parse-tree-wrap" hidden></div>
+    <div id="parse-trace-wrap" hidden></div>
+  </section>
+
+  <!-- =========================== 5. SEMANTIC =========================== -->
+  <section class="panel" id="panel-semantic" role="tabpanel">
+    <div class="panel-head">
+      <h2>Semantic Analysis</h2>
+      <p class="panel-sub">Scoped symbol table, type annotations, and type errors.</p>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 4">
+      <p>Symbol table and type diagnostics render here.</p>
+    </div>
+    <div id="symbol-table-wrap" hidden></div>
+  </section>
+
+  <!-- ============================== 6. ICG ============================= -->
+  <section class="panel" id="panel-icg" role="tabpanel">
+    <div class="panel-head">
+      <h2>Intermediate Code</h2>
+      <p class="panel-sub">Three-address code, basic blocks, and the control-flow graph.</p>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 5">
+      <p>TAC listing, basic blocks and the D3 control-flow graph render here.</p>
+    </div>
+    <div id="tac-wrap" hidden></div>
+    <div id="cfg-wrap" hidden></div>
+  </section>
+
+  <!-- ========================= 7. OPTIMIZATION ========================= -->
+  <section class="panel" id="panel-optimization" role="tabpanel">
+    <div class="panel-head">
+      <h2>Optimization</h2>
+      <p class="panel-sub">
+        Toggle each pass independently and watch the instruction count drop.
+      </p>
+    </div>
+    <div class="opt-toggles" id="opt-toggles">
+      <label class="toggle">
+        <input type="checkbox" data-opt="constantFolding" checked />
+        <span>Constant folding</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" data-opt="constantPropagation" checked />
+        <span>Constant propagation</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" data-opt="deadCodeElimination" checked />
+        <span>Dead code elimination</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" data-opt="commonSubexpressionElimination" />
+        <span>Common subexpression elimination <em>(Tier C)</em></span>
+      </label>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 6">
+      <p>Side-by-side before/after diff and the instruction-count delta render here.</p>
+    </div>
+    <div id="opt-wrap" hidden></div>
+  </section>
+
+  <!-- ============================ 8. TARGET ============================ -->
+  <section class="panel" id="panel-target" role="tabpanel">
+    <div class="panel-head">
+      <h2>Target Code</h2>
+      <p class="panel-sub">Stack-VM assembly, and the program's real output.</p>
+    </div>
+    <div class="empty-state" data-step="Tier A &middot; step 7">
+      <p>Generated assembly renders here; the Run button executes it on the stack VM.</p>
+    </div>
+    <div id="asm-wrap" hidden></div>
+    <div class="output-wrap">
+      <h3>Program output</h3>
+      <pre id="program-output" class="output">&mdash;</pre>
+    </div>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <span id="footer-status">Ready.</span>
+  <span class="footer-right">
+    <span id="footer-phases">phases: none</span>
+    <span class="sep">&middot;</span>
+    <span id="footer-version">v&mdash;</span>
+  </span>
+</footer>
+
+</body>
+</html>
