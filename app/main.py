@@ -36,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.lexer import tokenize
 from app.logging_config import configure_logging, get_logger
+from app.parser import ParseError, parse
 from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR, DEMO_PROGRAM
 from app.schemas import (
     CompileMeta,
@@ -60,7 +61,7 @@ INDEX_HTML: Final[Path] = STATIC_DIR / "index.html"
 #: Compilation phases that are fully implemented. Each step of the build adds
 #: one entry here, and ``GET /api/health`` reports it, which gives the frontend
 #: (and the marker) an honest picture of what is wired up.
-IMPLEMENTED_PHASES: Final[list[str]] = ["lexer"]
+IMPLEMENTED_PHASES: Final[list[str]] = ["lexer", "parser"]
 
 
 @asynccontextmanager
@@ -180,8 +181,8 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
     """Compile MiniLang source and return every phase's artefacts.
 
     Phases run in the order given by the plan and each populates its own slice
-    of the response. Implemented so far: lexical analysis. Later steps add the
-    parser, semantic analyser, TAC, optimiser, codegen and VM.
+    of the response. Implemented so far: lexical analysis and syntax analysis.
+    Later steps add the semantic analyser, TAC, optimiser, codegen and VM.
 
     A phase that fails does not abort the request: its diagnostics are recorded
     and ``meta.reached_phase`` reports how far the pipeline got, so the tabs
@@ -218,6 +219,28 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
     response.meta.ok = lex_result.ok
     response.meta.timings.append(PhaseTiming(phase="lexer", ms=round(lex_ms, 3)))
 
+    # --- Phase 2: syntax analysis --------------------------------------
+    # Parsed even when the lexer reported errors: the scanner recovers and
+    # always yields a complete, EOF-terminated stream, so the parse is still
+    # meaningful and more useful than refusing to run.
+    #
+    # Populates `ast`, not `parseTree`. They are different artefacts: this is
+    # the abstract tree, while `parseTree` in the plan's section 3 schema is the
+    # concrete derivation belonging to the Tier B table-driven parser.
+    parse_started = time.perf_counter()
+    function_count = 0
+    try:
+        program = parse(lex_result.tokens)
+    except ParseError as exc:
+        response.errors.append(exc.to_api())
+        response.meta.ok = False
+    else:
+        response.ast = program.to_dict()
+        response.meta.reached_phase = "parser"
+        function_count = len(program.functions)
+    parse_ms = (time.perf_counter() - parse_started) * 1000.0
+    response.meta.timings.append(PhaseTiming(phase="parser", ms=round(parse_ms, 3)))
+
     response.meta.timings.append(
         PhaseTiming(phase="total", ms=round((time.perf_counter() - started) * 1000.0, 3))
     )
@@ -230,6 +253,8 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
             "reached_phase": response.meta.reached_phase,
             "token_count": len(response.tokens),
             "lexical_errors": len(lex_result.errors),
+            "functions": function_count,
+            "total_errors": len(response.errors),
             "optimizations": request.optimizations.model_dump(),
         },
     )
