@@ -23,6 +23,7 @@ are still stubs, awaiting ``app/vm.py`` and ``app/grammar.py``.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -30,7 +31,7 @@ from pathlib import Path
 from typing import Final
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -132,15 +133,40 @@ async def log_requests(request: Request, call_next: Callable) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/", include_in_schema=False)
-async def index() -> FileResponse:
-    """Serve the single-page frontend.
+def asset_version() -> str:
+    """Return a fingerprint that changes whenever a frontend asset changes.
+
+    Browsers cache ``app.js`` and friends aggressively, so an edit can appear
+    to have no effect until a hard refresh -- a genuinely confusing failure,
+    because the served file is correct and only the browser's copy is stale.
+    Stamping this onto every asset URL makes the browser fetch the new file the
+    moment its bytes change, and keep using its cache when they have not.
+
+    Derived from size and modification time rather than file contents: it runs
+    per page load, and hashing a 280 KB D3 bundle on every request would be
+    waste for no extra correctness here.
 
     Returns:
-        The ``static/index.html`` file, which loads ``app.js`` and ``viz.js``
-        and renders all eight tabs.
+        A short hexadecimal fingerprint of the current asset set.
     """
-    return FileResponse(INDEX_HTML)
+    digest = hashlib.sha256()
+    for path in sorted(STATIC_DIR.rglob("*")):
+        if path.is_file() and path.suffix in {".js", ".css"}:
+            stat = path.stat()
+            digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()[:12]
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> HTMLResponse:
+    """Serve the single-page frontend, with cache-busted asset URLs.
+
+    Returns:
+        ``static/index.html`` with ``__ASSET_VERSION__`` replaced by the current
+        :func:`asset_version` fingerprint.
+    """
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("__ASSET_VERSION__", asset_version()))
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["meta"])

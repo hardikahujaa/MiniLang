@@ -12,6 +12,8 @@ the schema and on invariants, not on artefacts being empty.
 from __future__ import annotations
 
 import json
+import os
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -321,6 +323,57 @@ class TestSyntaxAnalysis:
 
     def test_health_reports_both_phases(self, client: TestClient):
         assert client.get("/api/health").json()["phasesImplemented"] == ["lexer", "parser"]
+
+
+class TestAssetFingerprinting:
+    """Cache-busting for the frontend assets.
+
+    A stale browser cache presents as "my edit did nothing", which is unusually
+    hard to diagnose: the served file is correct and only the browser's copy is
+    old, so every check short of a hard refresh looks fine.
+    """
+
+    def test_index_has_no_unreplaced_placeholder(self, client: TestClient):
+        assert "__ASSET_VERSION__" not in client.get("/").text
+
+    def test_every_local_asset_is_fingerprinted(self, client: TestClient):
+        body = client.get("/").text
+        for asset in ("style.css", "app.js", "editor.js", "highlight.js", "viz.js"):
+            assert re.search(
+                rf"/static/{re.escape(asset)}\?v=[0-9a-f]+", body
+            ), f"{asset} is not cache-busted"
+
+    def test_vendored_d3_is_fingerprinted_too(self, client: TestClient):
+        assert re.search(r"/static/lib/d3\.v7\.min\.js\?v=[0-9a-f]+", client.get("/").text)
+
+    def test_fingerprint_is_stable_while_files_are_unchanged(self, client: TestClient):
+        """Otherwise every page load would refetch every asset."""
+        first = re.findall(r"app\.js\?v=([0-9a-f]+)", client.get("/").text)[0]
+        second = re.findall(r"app\.js\?v=([0-9a-f]+)", client.get("/").text)[0]
+        assert first == second
+
+    def test_fingerprint_changes_when_an_asset_changes(self):
+        """The whole point: an edit must invalidate the browser's copy."""
+        from app import main
+
+        before = main.asset_version()
+        target = main.STATIC_DIR / "app.js"
+        original = target.stat()
+        os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns + 1_000_000_000))
+        try:
+            assert main.asset_version() != before
+        finally:
+            os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+        assert main.asset_version() == before
+
+    def test_fingerprinted_asset_is_actually_served(self, client: TestClient):
+        """The query string must not stop StaticFiles from finding the file."""
+        assert client.get("/static/app.js?v=deadbeef").status_code == 200
+
+    def test_index_is_served_as_html(self, client: TestClient):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
 
 
 class TestOpenApi:
