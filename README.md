@@ -17,9 +17,10 @@ The frontend is a real IDE, not a form: syntax-highlighted editor with a line
 gutter, project tree, build log, problems list, and a status bar — dark theme,
 no npm, no build step.
 
-> **Status:** Tier A step 2 of 7 — the lexer is live. Press **Build** and the
-> Lexical tab fills with the real token stream. Remaining phases land one per
-> step; see [Build status](#build-status).
+> **Status:** Tier A step 3 of 7 — lexer and parser are live. Press **Build**
+> and tab 2 fills with the token stream, tab 4 with a navigable parse tree.
+> Syntax errors appear in the Problems panel; click one to jump to it.
+> Remaining phases land one per step; see [Build status](#build-status).
 
 ## Quick start
 
@@ -207,7 +208,7 @@ natural-language explanation strings.
 ## Running the tests
 
 ```bash
-pytest                                        # the suite (371 tests)
+pytest                                        # the suite (644 tests)
 pytest --cov=app --cov-report=term-missing    # with coverage
 ruff check .                                  # lint
 black --check .                               # formatting
@@ -255,8 +256,8 @@ demoable increment.
 |---|--------------------------------------------------------|--------|
 | 1 | Scaffold: FastAPI, 8-tab UI, stubbed `/compile`, CI     | ✅ done |
 | 2 | Lexer + token table + IDE frontend                      | ✅ done |
-| 3 | AST + recursive descent parser + D3 parse tree          | ⬜      |
-| 4 | Semantic analysis + symbol table                        | ⬜      |
+| 3 | AST + recursive descent parser + D3 parse tree          | ✅ done |
+| 4 | Semantic analysis + symbol table                        | ⬜ next |
 | 5 | TAC generation + basic blocks + CFG                     | ⬜      |
 | 6 | Constant folding, propagation, DCE + toggles            | ⬜      |
 | 7 | Codegen + stack VM + Run button                         | ⬜      |
@@ -278,6 +279,49 @@ regex → NFA → DFA animation · common subexpression elimination · LLM
 explanation layer · deployment · loop-invariant code motion ·
 **multi-language lexing** (drive the existing scanner from a per-language
 keyword table so the Lexical tab works for C, C++ and Java too).
+
+---
+
+## How precedence works
+
+There is no precedence table in this compiler and no operator-precedence
+algorithm. Precedence is expressed *structurally*, by the order in which the
+expression rules call one another:
+
+```
+expression → logic_or → logic_and → equality
+           → comparison → term → factor → unary → primary
+```
+
+Each level consumes its own operators and delegates to the next level down for
+its operands. Because `term` (`+ -`) calls `factor` (`* / %`) for both sides, a
+multiplication always lands in a subtree *below* an addition — so `2 + 3 * 4`
+parses as `(+ 2 (* 3 4))` without anything ever comparing two operators:
+
+```
+  2 + 3 * 4                  (3 + 4) * (3 + 4)
+
+       +                              *
+      ╱ ╲                           ╱   ╲
+     2   *                         +     +
+        ╱ ╲                       ╱ ╲   ╱ ╲
+       3   4                     3   4 3   4
+```
+
+Binary levels loop with `while`, which makes them left-associative; `unary`
+recurses into itself instead, which makes prefix operators right-associative so
+`!!flag` and `- -n` parse. Tab 4 draws exactly this, so the tree is visual proof
+the precedence is right.
+
+**Depth is bounded.** Recursive descent runs on the Python call stack, and each
+level of nesting costs 15 frames (measured). Unguarded, roughly 55 levels of
+nested parentheses would raise `RecursionError` — an unhandled crash and a 500
+from `/compile`. `MAX_NESTING_DEPTH` turns that into an ordinary, positioned
+syntax error.
+
+**Error handling is Baseline A.** The parser aborts on the first syntax error by
+design, not as a limitation: it is the control condition in the recovery
+benchmark, and the recovering parser in Tier B is measured against it.
 
 ---
 
@@ -362,6 +406,8 @@ MiniLang/
 ├── app/
 │   ├── main.py             FastAPI routes; thin orchestrator
 │   ├── lexer.py            phase 1: hand-written tokenizer
+│   ├── ast_nodes.py        AST node definitions, JSON-serialisable
+│   ├── parser.py           phase 2: recursive descent (Baseline A)
 │   ├── schemas.py          the /compile JSON contract, as typed models
 │   ├── logging_config.py   structured JSON logging
 │   ├── samples.py          canonical demo program and grammars

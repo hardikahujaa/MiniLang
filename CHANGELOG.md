@@ -12,6 +12,60 @@ list of commits.
 
 ## [Unreleased]
 
+### Tier A · Step 3 — Parser, AST, and the parse tree
+
+#### Added
+
+- **`app/ast_nodes.py`** — 16 node types over an abstract `ASTNode` base whose
+  `to_dict()` is abstract, so a new node cannot be added without deciding how it
+  renders. Position is keyword-only and required on every node: a compiler that
+  cannot say *where* is not useful. The serialised form carries `name` and
+  `children`, which are exactly D3's default hierarchy accessors, so one
+  serialisation serves both the raw AST and the tree view.
+- **`app/parser.py`** — hand-written recursive descent over the plan's §2
+  grammar. Precedence is structural rather than tabular: the call chain
+  `expression → logic_or → … → primary` *is* the precedence table, so
+  `2 + 3 * 4` nests correctly without anything ever comparing two operators.
+  Binary levels loop (left-associative); `unary` recurses (right-associative).
+- **`MAX_NESTING_DEPTH`** — recursive descent runs on the Python call stack, and
+  each nesting level costs 15 frames (measured, not estimated). Unguarded,
+  ~55 levels of nested parentheses raised `RecursionError`, which is an
+  unhandled crash and a 500 from `/compile`. Now an ordinary syntax error.
+- **`ParseError`** carrying the expected-token set, the offending token, its
+  position and the grammar rule in progress — everything the Tier B ranking
+  engine will need.
+- **D3 parse tree on tab 4** — collapsible nodes, zoom and pan, colour by node
+  kind, with expand/collapse/reset controls and a node and depth count.
+- **Accurate per-tab tooltips.** Each tab states the true reason it is empty,
+  rather than a uniform "run Build", which would be wrong for the five tabs that
+  need a later *phase* rather than a Build click.
+- **273 new tests** (371 → 644), covering every grammar rule, all seven
+  precedence levels, associativity in both directions, and 18 distinct malformed
+  programs each asserting a specific message.
+
+#### Changed
+
+- `/compile` runs phase 2 and returns `ast`; `IMPLEMENTED_PHASES` gains
+  `"parser"`. The parse runs even when the lexer reported errors, since the
+  scanner recovers and still yields a complete stream.
+- Problems render into a dedicated `#problems-list` container as
+  `.problem-item` rows. CSS class selectors are exact, so the stylesheet rule
+  was renamed in the same change — `.problem` does not match `problem-item`, and
+  moving only the JavaScript would have silently unstyled every row.
+- `_fail()` became `_error()`, *returning* the exception so call sites read
+  `raise self._error(...)`. A helper that raised made its callers look as though
+  they fell off the end without returning — which is also what the linter saw.
+
+#### Fixed
+
+- **The CI smoke test was passing vacuously.** It asserted `"parseTrace"` was
+  present in the `/compile` response, but that key is an empty list in *every*
+  response — the check passed even for the input `@@@@`. It now asserts real
+  artefacts: a `FUNC` token, a `Program` node, and that a syntax error is
+  reported rather than crashing the endpoint.
+
+---
+
 ### Tier A · Step 2 — Lexer, and an IDE-grade frontend
 
 #### Added
