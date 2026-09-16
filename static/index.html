@@ -101,28 +101,28 @@
   <main class="main">
 
     <nav class="tabstrip" role="tablist" aria-label="Compilation phases">
-      <button class="tab is-active" role="tab" data-tab="source" aria-selected="true">
+      <button class="tab is-active" role="tab" data-tab="source" title="Your MiniLang source - everything on the other tabs is derived from it" aria-selected="true">
         <span class="tab-num">1</span>Source
       </button>
-      <button class="tab" role="tab" data-tab="lexical" aria-selected="false">
+      <button class="tab" role="tab" data-tab="lexical" title="Token stream - run Build to populate" aria-selected="false">
         <span class="tab-num">2</span>Lexical
       </button>
-      <button class="tab" role="tab" data-tab="theory" aria-selected="false">
+      <button class="tab" role="tab" data-tab="theory" title="Arrives in Tier B - paste any grammar for FIRST/FOLLOW, SLR and LALR tables" aria-selected="false">
         <span class="tab-num">3</span>Parser Theory
       </button>
-      <button class="tab" role="tab" data-tab="syntax" aria-selected="false">
+      <button class="tab" role="tab" data-tab="syntax" title="Parse tree - run Build to populate" aria-selected="false">
         <span class="tab-num">4</span>Syntax
       </button>
-      <button class="tab" role="tab" data-tab="semantic" aria-selected="false">
+      <button class="tab" role="tab" data-tab="semantic" title="Arrives in Tier A step 4 - scoped symbol table and type checking" aria-selected="false">
         <span class="tab-num">5</span>Semantic
       </button>
-      <button class="tab" role="tab" data-tab="icg" aria-selected="false">
+      <button class="tab" role="tab" data-tab="icg" title="Arrives in Tier A step 5 - three-address code and control-flow graph" aria-selected="false">
         <span class="tab-num">6</span>ICG
       </button>
-      <button class="tab" role="tab" data-tab="optimization" aria-selected="false">
+      <button class="tab" role="tab" data-tab="optimization" title="Arrives in Tier A step 6 - toggle each pass and see the diff" aria-selected="false">
         <span class="tab-num">7</span>Optimization
       </button>
-      <button class="tab" role="tab" data-tab="target" aria-selected="false">
+      <button class="tab" role="tab" data-tab="target" title="Arrives in Tier A step 7 - stack-VM assembly and a Run button" aria-selected="false">
         <span class="tab-num">8</span>Target
       </button>
     </nav>
@@ -182,10 +182,17 @@
 
       <!-- ========================== 4. SYNTAX ========================== -->
       <section class="panel" id="panel-syntax" role="tabpanel">
-        <div class="empty-state" data-step="Tier A &middot; step 3">
-          <p>D3 parse tree and AST render here; step-through animation arrives in Tier B.</p>
+        <div class="pane-toolbar" id="tree-toolbar" hidden>
+          <div class="stat-row" id="tree-stats"></div>
+          <div class="toolbar-spacer"></div>
+          <button class="btn btn-sm" id="btn-tree-expand" type="button">Expand all</button>
+          <button class="btn btn-sm" id="btn-tree-collapse" type="button">Collapse all</button>
+          <button class="btn btn-sm" id="btn-tree-reset" type="button">Reset view</button>
         </div>
-        <div id="parse-tree-wrap" hidden></div>
+        <div class="empty-state" id="syntax-empty" data-step="press Build">
+          <p>The parse tree renders here. Click a node to fold it, scroll to zoom, drag to pan.</p>
+        </div>
+        <div id="parse-tree-wrap" class="tree-host" hidden></div>
         <div id="parse-trace-wrap" hidden></div>
       </section>
 
@@ -260,7 +267,12 @@
       </div>
       <div class="outputpane-body">
         <div class="out-view is-active" id="out-problems">
-          <div class="out-empty">No problems detected.</div>
+          <!-- Scroll container above, list container below: renderProblems()
+               replaces only the list, so the pane's scroll position and any
+               future toolbar survive a rebuild. -->
+          <div id="problems-list" class="problems-list">
+            <div class="out-empty">No problems detected.</div>
+          </div>
         </div>
         <pre class="out-view out-log" id="out-build"></pre>
         <pre class="out-view out-log" id="out-program"></pre>

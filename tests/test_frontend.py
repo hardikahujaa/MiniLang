@@ -90,12 +90,16 @@ class TestDomContract:
             "token-stats",
             "lexical-empty",
             "out-problems",
+            "problems-list",
             "out-build",
             "out-program",
             "problem-count",
             "outputpane",
             "sidebar",
             "phase-list",
+            "parse-tree-wrap",
+            "tree-toolbar",
+            "syntax-empty",
             "menu-dropdown",
             "opt-toggles",
             "status-state",
@@ -200,6 +204,11 @@ class TestCategoryStyling:
     def test_category_has_a_css_class(self, category: str):
         assert f".cat-{category}" in STYLE_CSS, f"no .cat-{category} rule in style.css"
 
+    def test_problem_rows_are_styled_under_their_actual_class(self):
+        """CSS selectors are exact: `.problem` does not match `class="problem-item"`."""
+        assert ".problem-item {" in STYLE_CSS
+        assert 'class="problem-item' in APP_JS
+
 
 class TestLanguageSupport:
     """The language picker and the highlighter must offer the same languages."""
@@ -226,6 +235,96 @@ class TestLanguageSupport:
     def test_non_minilang_builds_are_refused_in_the_ui(self):
         """Only MiniLang has a backend pipeline; Build must say so, not 500."""
         assert 'language !== "minilang"' in APP_JS
+
+
+class TestTabTooltips:
+    """Every tab explains itself on hover, and says something true."""
+
+    def test_every_tab_has_a_tooltip(self):
+        buttons = re.findall(r"<button[^>]*?class=\"tab[^>]*?>", INDEX_HTML)
+        assert len(buttons) == 8
+        for button in buttons:
+            assert 'title="' in button, f"tab without a tooltip: {button[:80]}"
+
+    def test_tooltips_are_not_all_identical(self):
+        """A uniform tooltip would be wrong for most tabs; each states its own reason."""
+        titles = re.findall(r'class="tab[^>]*?title="([^"]+)"', INDEX_HTML)
+        assert len(set(titles)) == len(titles), "tab tooltips are duplicated"
+
+    @pytest.mark.parametrize(
+        ("tab", "fragment"),
+        [
+            ("lexical", "run Build"),
+            ("syntax", "run Build"),
+            ("theory", "Tier B"),
+            ("semantic", "step 4"),
+            ("icg", "step 5"),
+            ("optimization", "step 6"),
+            ("target", "step 7"),
+        ],
+    )
+    def test_tooltip_names_the_right_milestone(self, tab: str, fragment: str):
+        """A built tab says 'run Build'; an unbuilt one names the step that fills it."""
+        match = re.search(rf'data-tab="{tab}" title="([^"]+)"', INDEX_HTML)
+        assert match, f"no tooltip for tab {tab}"
+        assert fragment in match.group(1)
+
+
+class TestParseTreeContract:
+    """The Syntax tab's renderer and its container must agree."""
+
+    def test_viz_exports_render_tree(self):
+        assert "renderTree:" in SCRIPT_SOURCES["viz.js"]
+
+    def test_controller_calls_render_tree(self):
+        assert 'Viz.renderTree("#parse-tree-wrap"' in APP_JS
+
+    def test_tree_is_redrawn_when_its_tab_becomes_visible(self):
+        """An SVG laid out inside display:none measures zero and renders wrong."""
+        assert 'name === "syntax"' in APP_JS
+
+    def test_every_node_kind_the_backend_emits_has_a_colour(self):
+        """A kind with no colour renders in the fallback grey, losing meaning."""
+        from app.ast_nodes import ASTNode
+
+        viz = SCRIPT_SOURCES["viz.js"]
+        coloured = set(re.findall(r"^    (\w+): \"var\(", viz, re.MULTILINE))
+
+        emitted = set()
+        for subclass in ASTNode.__subclasses__():
+            emitted.update(_kinds_of(subclass))
+        assert emitted <= coloured, f"kinds with no colour: {sorted(emitted - coloured)}"
+
+    def test_measure_is_iterative_not_recursive(self):
+        """A deep tree would otherwise risk the JS stack on every render."""
+        viz = SCRIPT_SOURCES["viz.js"]
+        body = viz[viz.index("function measure(") :]
+        body = body[: body.index("\n  }")]
+        assert "stack" in body
+        assert "while" in body
+
+
+def _kinds_of(cls) -> set[str]:
+    """Return the `kind` strings a node class and its subclasses emit.
+
+    Args:
+        cls: An :class:`~app.ast_nodes.ASTNode` subclass.
+
+    Returns:
+        Every literal passed as ``kind=`` in that class tree's ``to_dict``.
+    """
+    import inspect
+
+    kinds: set[str] = set()
+    for subclass in [cls, *cls.__subclasses__()]:
+        try:
+            source = inspect.getsource(subclass)
+        except OSError:  # pragma: no cover - source always available here
+            continue
+        kinds.update(re.findall(r'kind="(\w+)"', source))
+        if subclass is not cls:
+            kinds.update(_kinds_of(subclass))
+    return kinds
 
 
 class TestOptimizationToggleContract:
