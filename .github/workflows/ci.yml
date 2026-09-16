@@ -50,6 +50,16 @@ jobs:
       - name: Check formatting (black)
         run: black --check --diff .
 
+      - name: Check JavaScript syntax
+        # There is no bundler between static/*.js and the browser, so a stray
+        # character would break the entire UI with every Python test still
+        # green. `node --check` parses without executing.
+        run: |
+          for f in static/app.js static/editor.js static/highlight.js static/viz.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
       - name: Run tests (pytest)
         run: pytest --cov=app --cov-report=term-missing --cov-report=xml
 
