@@ -13,12 +13,12 @@ Design rule from the plan (section 3): ``/compile`` returns a single JSON object
 containing the artefacts of *every* phase at once, so the frontend is pure
 rendering -- no client-side state machine, no orchestration, no bugs.
 
-Scaffold status
----------------
-The three POST endpoints are **stubs**. They validate their input, log
-structurally, and return a schema-correct empty payload so the frontend can be
-built and the request flow proven end to end before any compiler phase exists.
-Each phase replaces one stub section, in the module order given in the plan.
+Build status
+------------
+``/compile`` runs every phase listed in :data:`IMPLEMENTED_PHASES` and leaves
+the rest of the response at its empty default, so an unbuilt phase renders as
+an empty tab rather than breaking the page. ``/run`` and ``/analyze-grammar``
+are still stubs, awaiting ``app/vm.py`` and ``app/grammar.py``.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.lexer import tokenize
 from app.logging_config import configure_logging, get_logger
 from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR, DEMO_PROGRAM
 from app.schemas import (
@@ -59,7 +60,7 @@ INDEX_HTML: Final[Path] = STATIC_DIR / "index.html"
 #: Compilation phases that are fully implemented. Each step of the build adds
 #: one entry here, and ``GET /api/health`` reports it, which gives the frontend
 #: (and the marker) an honest picture of what is wired up.
-IMPLEMENTED_PHASES: Final[list[str]] = []
+IMPLEMENTED_PHASES: Final[list[str]] = ["lexer"]
 
 
 @asynccontextmanager
@@ -178,11 +179,13 @@ async def demo() -> dict[str, str]:
 async def compile_source(request: CompileRequest) -> CompileResponse:
     """Compile MiniLang source and return every phase's artefacts.
 
-    **Scaffold stub.** Returns a schema-correct, artefact-empty payload with
-    real source statistics, which is enough to prove the browser -> FastAPI ->
-    JSON round trip before any phase exists. Phases are filled in one at a time
-    in the order given by the plan: lexer, parser, semantic, TAC, optimise,
-    codegen, VM.
+    Phases run in the order given by the plan and each populates its own slice
+    of the response. Implemented so far: lexical analysis. Later steps add the
+    parser, semantic analyser, TAC, optimiser, codegen and VM.
+
+    A phase that fails does not abort the request: its diagnostics are recorded
+    and ``meta.reached_phase`` reports how far the pipeline got, so the tabs
+    that *do* have data still render.
 
     Args:
         request: The source text plus per-pass optimisation toggles.
@@ -197,12 +200,24 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
     response = CompileResponse(
         meta=CompileMeta(
             ok=True,
-            reached_phase="stub",
+            reached_phase="none",
             source_lines=len(source.splitlines()),
             source_bytes=len(source.encode("utf-8")),
             version=__version__,
         )
     )
+
+    # --- Phase 1: lexical analysis -------------------------------------
+    lex_started = time.perf_counter()
+    lex_result = tokenize(source)
+    lex_ms = (time.perf_counter() - lex_started) * 1000.0
+
+    response.tokens = [token.to_api() for token in lex_result.tokens]
+    response.errors.extend(error.to_api() for error in lex_result.errors)
+    response.meta.reached_phase = "lexer"
+    response.meta.ok = lex_result.ok
+    response.meta.timings.append(PhaseTiming(phase="lexer", ms=round(lex_ms, 3)))
+
     response.meta.timings.append(
         PhaseTiming(phase="total", ms=round((time.perf_counter() - started) * 1000.0, 3))
     )
@@ -213,6 +228,8 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
             "source_lines": response.meta.source_lines,
             "source_bytes": response.meta.source_bytes,
             "reached_phase": response.meta.reached_phase,
+            "token_count": len(response.tokens),
+            "lexical_errors": len(lex_result.errors),
             "optimizations": request.optimizations.model_dump(),
         },
     )

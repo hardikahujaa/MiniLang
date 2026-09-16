@@ -38,10 +38,18 @@ class ApiModel(BaseModel):
 class Token(ApiModel):
     """A single lexical token produced by :mod:`app.lexer`."""
 
-    type: str = Field(description="Token class, e.g. 'KEYWORD', 'IDENT', 'NUMBER'.")
+    type: str = Field(description="Fine-grained token class, e.g. 'FUNC', 'IDENT', 'LPAREN'.")
     lexeme: str = Field(description="The exact source text this token was matched from.")
     line: int = Field(ge=1, description="1-based source line.")
     col: int = Field(ge=1, description="1-based column of the token's first character.")
+    category: str | None = Field(
+        default=None,
+        description=(
+            "Broad class the type belongs to: keyword, identifier, literal, operator, "
+            "punctuation or special. Supplied by the backend so the token table can "
+            "colour-code rows without duplicating the type-to-category mapping in JS."
+        ),
+    )
 
 
 class DfaView(ApiModel):
