@@ -1,24 +1,39 @@
 /* ==========================================================================
-   MiniLang Compiler Visualizer -- frontend controller
+   MiniLang IDE -- application controller
 
-   Responsibilities:
-     - tab switching
-     - editor state and the "load demo" action
-     - POST /compile, and dispatching the response to each tab's renderer
+   Owns data flow and DOM wiring. Drawing lives in viz.js, syntax colouring in
+   highlight.js, and the editor component in editor.js.
 
-   Design rule from the plan (section 3): /compile returns every phase's
-   artefacts in one object, so this file is pure rendering. There is no state
-   machine here, no per-phase request sequencing, and no orchestration --
-   exactly one fetch, then one render pass per tab.
+   Design rule from the plan (section 3): POST /compile returns every phase's
+   artefacts in one object, so this file is pure rendering -- one fetch, then
+   one render pass per tab. There is no client-side state machine.
 
-   Scaffold status: the render functions for phases that do not exist yet are
-   registered but inert. Each build step replaces one of them.
+   Long-file strategy
+   ------------------
+   Two places would otherwise fall over on a large program:
+
+     editor      handled in editor.js (debounced repaint, plain-text fallback)
+     token table handled here by renderTokens(), which windows the rows so that
+                 only what fits on screen exists in the DOM. A 20k-token
+                 program creates roughly 40 row elements, not 20,000.
    ========================================================================== */
 
 "use strict";
 
-/** Shape of the last successful /compile response, kept for re-renders. */
-let lastCompileResult = null;
+/** Height of one token row in pixels. Must match `.vt-row` in style.css. */
+const ROW_HEIGHT = 24;
+
+/** Extra rows rendered above and below the viewport to smooth fast scrolling. */
+const ROW_OVERSCAN = 8;
+
+/** The most recent successful /compile response. */
+let lastResult = null;
+
+/** Tokens currently displayed, after the filter box has been applied. */
+let visibleTokens = [];
+
+/** The editor instance, created on DOMContentLoaded. */
+let editor = null;
 
 /* -------------------------------------------------------------------------
    DOM helpers
@@ -27,148 +42,259 @@ let lastCompileResult = null;
 /**
  * Shorthand for `document.querySelector`.
  * @param {string} selector - A CSS selector.
- * @returns {Element|null} The first matching element, or null.
+ * @returns {Element|null} The first match, or null.
  */
 function $(selector) {
   return document.querySelector(selector);
 }
 
 /**
- * Shorthand for `document.querySelectorAll`, returned as a real array.
+ * Shorthand for `document.querySelectorAll`, as a real array.
  * @param {string} selector - A CSS selector.
- * @returns {Element[]} All matching elements.
+ * @returns {Element[]} All matches.
  */
 function $$(selector) {
   return Array.from(document.querySelectorAll(selector));
 }
 
-/* -------------------------------------------------------------------------
-   Status reporting
-   ------------------------------------------------------------------------- */
-
 /**
- * Update the header pill and the footer status line together.
- *
- * Keeping both in one function means the two indicators can never disagree,
- * which matters during a live demo where the footer is the thing on screen.
- *
- * @param {"idle"|"working"|"ok"|"error"} state - Visual state for the pill.
- * @param {string} label - Short text shown inside the pill.
- * @param {string} [detail] - Longer text for the footer; defaults to `label`.
- * @returns {void}
+ * Escape text for safe insertion as HTML.
+ * @param {string} text - Untrusted text.
+ * @returns {string} Escaped text.
  */
-function setStatus(state, label, detail) {
-  const pill = $("#status-pill");
-  pill.className = `pill pill-${state}`;
-  pill.textContent = label;
-  $("#footer-status").textContent = detail || label;
+function esc(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 /* -------------------------------------------------------------------------
-   Tabs
+   Status bar and build log
    ------------------------------------------------------------------------- */
 
 /**
- * Activate one tab and reveal its panel, hiding the others.
- * @param {string} name - The `data-tab` value, e.g. `"lexical"`.
+ * Set the status bar's state and message.
+ * @param {"ready"|"working"|"ok"|"error"} state - Visual state.
+ * @param {string} message - Text shown in the leftmost cell.
+ * @returns {void}
+ */
+function setStatus(state, message) {
+  const bar = $(".statusbar");
+  bar.classList.toggle("is-error", state === "error");
+  bar.classList.toggle("is-working", state === "working");
+  $("#status-state").textContent = message;
+}
+
+/**
+ * Append a timestamped line to the Build log tab.
+ * @param {string} line - Text to append.
+ * @returns {void}
+ */
+function log(line) {
+  const stamp = new Date().toLocaleTimeString([], { hour12: false });
+  const pane = $("#out-build");
+  pane.textContent += `[${stamp}] ${line}\n`;
+  pane.scrollTop = pane.scrollHeight;
+}
+
+/* -------------------------------------------------------------------------
+   Tabs and panes
+   ------------------------------------------------------------------------- */
+
+/**
+ * Activate one phase tab and reveal its panel.
+ * @param {string} name - The `data-tab` value.
  * @returns {void}
  */
 function activateTab(name) {
   $$(".tab").forEach((tab) => {
-    const isActive = tab.dataset.tab === name;
-    tab.classList.toggle("is-active", isActive);
-    tab.setAttribute("aria-selected", String(isActive));
+    const active = tab.dataset.tab === name;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", String(active));
   });
   $$(".panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `panel-${name}`);
   });
+  // The virtual table measures its viewport, which is zero while hidden.
+  if (name === "lexical") renderTokenWindow();
 }
 
-/* -------------------------------------------------------------------------
-   Editor
-   ------------------------------------------------------------------------- */
-
 /**
- * Refresh the line/character counter shown above the editor.
+ * Activate one output-pane tab.
+ * @param {string} name - The `data-out` value.
  * @returns {void}
  */
-function updateEditorMeta() {
-  const source = $("#source-editor").value;
-  const lines = source.length === 0 ? 0 : source.split("\n").length;
-  $("#editor-meta").textContent = `${lines} lines · ${source.length} chars`;
-}
-
-/**
- * Read the optimisation checkboxes into the shape `/compile` expects.
- * @returns {Object<string, boolean>} Toggle state keyed by camelCase pass name.
- */
-function readOptimizationToggles() {
-  const toggles = {};
-  $$("#opt-toggles input[data-opt]").forEach((input) => {
-    toggles[input.dataset.opt] = input.checked;
-  });
-  return toggles;
+function activateOutTab(name) {
+  $$(".out-tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.out === name));
+  $$(".out-view").forEach((view) => view.classList.toggle("is-active", view.id === `out-${name}`));
 }
 
 /* -------------------------------------------------------------------------
-   Per-phase renderers
+   Token table (windowed)
    ------------------------------------------------------------------------- */
 
 /**
- * Render the syntax-error list on the Source tab.
+ * Render the token stream, filtered and windowed.
  *
- * Implemented now (rather than deferred with the other phases) because the
- * scaffold must show *something* when the backend reports a problem, and the
- * error list is what the error-recovery feature ultimately drives.
+ * Sets the scroll spacer to the full height of all rows so the scrollbar is
+ * honest, then draws only the slice currently on screen.
+ *
+ * @param {Array<Object>} tokens - Entries from `CompileResponse.tokens`.
+ * @returns {void}
+ */
+function renderTokens(tokens) {
+  const query = $("#token-filter").value.trim().toLowerCase();
+  visibleTokens = !query
+    ? tokens
+    : tokens.filter(
+        (t) =>
+          t.type.toLowerCase().includes(query) ||
+          t.lexeme.toLowerCase().includes(query) ||
+          (t.category || "").toLowerCase().includes(query)
+      );
+
+  const hasTokens = tokens.length > 0;
+  $("#lexical-empty").hidden = hasTokens;
+  $("#token-table-wrap").hidden = !hasTokens;
+
+  const counts = {};
+  tokens.forEach((t) => {
+    const key = t.category || "other";
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const parts = [`<span><b>${tokens.length}</b> tokens</span>`];
+  Object.keys(counts)
+    .sort()
+    .forEach((key) => parts.push(`<span>${esc(key)}: <b>${counts[key]}</b></span>`));
+  if (query) parts.push(`<span>showing <b>${visibleTokens.length}</b></span>`);
+  $("#token-stats").innerHTML = parts.join("");
+
+  $("#token-spacer").style.height = `${visibleTokens.length * ROW_HEIGHT}px`;
+  renderTokenWindow();
+}
+
+/**
+ * Draw only the token rows currently inside the viewport.
+ * @returns {void}
+ */
+function renderTokenWindow() {
+  const viewport = $("#token-viewport");
+  const rows = $("#token-rows");
+  if (!viewport || !rows || $("#token-table-wrap").hidden) return;
+
+  const height = viewport.clientHeight || 400;
+  const first = Math.max(0, Math.floor(viewport.scrollTop / ROW_HEIGHT) - ROW_OVERSCAN);
+  const count = Math.ceil(height / ROW_HEIGHT) + ROW_OVERSCAN * 2;
+  const slice = visibleTokens.slice(first, first + count);
+
+  rows.style.transform = `translateY(${first * ROW_HEIGHT}px)`;
+  rows.innerHTML = slice
+    .map((token, offset) => {
+      const category = token.category || "special";
+      return (
+        '<div class="vt-row">' +
+        `<span class="vt-c-idx">${first + offset + 1}</span>` +
+        `<span class="vt-c-type"><span class="vt-type cat-${esc(category)}">${esc(token.type)}</span></span>` +
+        `<span class="vt-cat">${esc(category)}</span>` +
+        `<span class="vt-c-lex">${esc(token.lexeme) || "&nbsp;"}</span>` +
+        `<span class="vt-c-ln">${token.line}</span>` +
+        `<span class="vt-c-col">${token.col}</span>` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/* -------------------------------------------------------------------------
+   Problems
+   ------------------------------------------------------------------------- */
+
+/**
+ * Render diagnostics into the Problems tab.
+ *
+ * Each row jumps the editor to the offending position when clicked, which is
+ * the single most useful thing an error list can do.
  *
  * @param {Array<Object>} errors - Entries from `CompileResponse.errors`.
+ * @param {Array<Object>} typeErrors - Entries from `CompileResponse.typeErrors`.
  * @returns {void}
  */
-function renderErrors(errors) {
-  const wrap = $("#error-list");
-  const body = $("#error-list-body");
-  body.innerHTML = "";
+function renderProblems(errors, typeErrors) {
+  const all = [];
+  (errors || []).forEach((e) =>
+    all.push({
+      severity: "error",
+      line: e.line,
+      col: e.col,
+      message: e.message,
+      fix: e.suggestion,
+    })
+  );
+  (typeErrors || []).forEach((d) =>
+    all.push({
+      severity: d.severity || "error",
+      line: d.line || 1,
+      col: d.col || 1,
+      message: d.message,
+      fix: null,
+    })
+  );
 
-  if (!errors || errors.length === 0) {
-    wrap.hidden = true;
+  const badge = $("#problem-count");
+  badge.textContent = String(all.length);
+  badge.classList.toggle("has-errors", all.length > 0);
+
+  const host = $("#out-problems");
+  if (all.length === 0) {
+    host.innerHTML = '<div class="out-empty">No problems detected.</div>';
     return;
   }
 
-  errors.forEach((err) => {
-    const row = document.createElement("div");
-    row.style.fontFamily = "var(--mono)";
-    row.style.fontSize = "12px";
-    row.style.marginBottom = "6px";
-    const where = `line ${err.line}, col ${err.col}`;
-    const fix = err.suggestion ? ` — suggested fix: ${err.suggestion}` : "";
-    row.textContent = `${where}: ${err.message}${fix}`;
-    body.appendChild(row);
-  });
+  host.innerHTML = all
+    .map(
+      (p, i) =>
+        `<div class="problem" data-i="${i}" data-line="${p.line}" data-col="${p.col}">` +
+        `<span class="problem-sev${p.severity === "warning" ? " is-warn" : ""}">` +
+        `${p.severity === "warning" ? "warn" : "error"}</span>` +
+        `<span class="problem-pos">${p.line}:${p.col}</span>` +
+        `<span class="problem-msg">${esc(p.message)}` +
+        (p.fix ? ` <span class="problem-fix">&rarr; ${esc(p.fix)}</span>` : "") +
+        "</span></div>"
+    )
+    .join("");
 
-  wrap.hidden = false;
+  host.querySelectorAll(".problem").forEach((row) => {
+    row.addEventListener("click", () => {
+      activateTab("source");
+      editor.goTo(Number(row.dataset.line), Number(row.dataset.col));
+    });
+  });
 }
+
+/* -------------------------------------------------------------------------
+   Render dispatch
+   ------------------------------------------------------------------------- */
 
 /**
  * Dispatch a `/compile` response to every tab's renderer.
- *
- * Renderers for unimplemented phases are intentionally absent; their panels
- * keep showing the empty state that names the build step which will fill them.
- *
  * @param {Object} result - The parsed `CompileResponse`.
  * @returns {void}
  */
-function renderCompileResult(result) {
-  lastCompileResult = result;
+function renderResult(result) {
+  lastResult = result;
 
-  renderErrors(result.errors);
+  renderTokens(result.tokens || []);
+  renderProblems(result.errors, result.typeErrors);
 
-  // Target tab: program output, once the VM exists (Tier A, step 7).
-  $("#program-output").textContent = result.output && result.output.length > 0
-    ? result.output
-    : "—";
-
-  // Enable Run only once codegen has actually produced assembly.
+  $("#out-program").textContent = result.output || "";
   $("#btn-run").disabled = !result.asm || result.asm.length === 0;
+  $("#status-tokens").textContent = `${(result.tokens || []).length} tokens`;
+
+  const done = new Set();
+  const reached = (result.meta && result.meta.reachedPhase) || "";
+  if (reached && reached !== "none") done.add(reached);
+  $$("#phase-list li").forEach((li) => li.classList.toggle("is-done", done.has(li.dataset.phase)));
 }
 
 /* -------------------------------------------------------------------------
@@ -176,87 +302,290 @@ function renderCompileResult(result) {
    ------------------------------------------------------------------------- */
 
 /**
- * POST the editor contents to `/compile` and render the result.
+ * Read the optimisation checkboxes into the shape `/compile` expects.
+ * @returns {Object<string, boolean>} Toggle state keyed by camelCase pass name.
+ */
+function readToggles() {
+  const toggles = {};
+  $$("#opt-toggles input[data-opt]").forEach((input) => {
+    toggles[input.dataset.opt] = input.checked;
+  });
+  return toggles;
+}
+
+/**
+ * Compile the editor's contents and render the result.
  *
- * Network and HTTP failures are surfaced in the status pill rather than thrown,
+ * Network and HTTP failures are surfaced in the status bar rather than thrown,
  * so a backend restart mid-demo degrades visibly instead of silently.
  *
  * @returns {Promise<void>} Resolves once the response has been rendered.
  */
-async function compile() {
-  const source = $("#source-editor").value;
-  setStatus("working", "compiling…", "Compiling…");
+async function build() {
+  const language = editor.getLanguage();
+  if (language !== "minilang") {
+    setStatus("error", `Cannot build: the compiler targets MiniLang, not ${language.toUpperCase()}`);
+    log(`build refused: ${language} is supported for editing and highlighting only`);
+    activateOutTab("build");
+    return;
+  }
+
+  setStatus("working", "Building…");
+  const started = performance.now();
 
   try {
     const response = await fetch("/compile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        source: source,
-        optimizations: readOptimizationToggles(),
+        source: editor.getValue(),
+        optimizations: readToggles(),
         explainErrors: false,
       }),
     });
 
     if (!response.ok) {
       const detail = await response.text();
-      setStatus("error", `HTTP ${response.status}`, `Compile failed: ${detail.slice(0, 200)}`);
+      setStatus("error", `Build failed — HTTP ${response.status}`);
+      log(`HTTP ${response.status}: ${detail.slice(0, 400)}`);
+      activateOutTab("build");
       return;
     }
 
     const result = await response.json();
-    renderCompileResult(result);
+    renderResult(result);
 
+    const elapsed = (performance.now() - started).toFixed(0);
     const meta = result.meta || {};
-    const total = (meta.timings || []).find((t) => t.phase === "total");
-    const timing = total ? ` in ${total.ms.toFixed(1)} ms` : "";
-    setStatus(
-      "ok",
-      "compiled",
-      `Compiled ${meta.sourceLines || 0} lines (${meta.sourceBytes || 0} bytes)${timing} · ` +
-        `reached phase: ${meta.reachedPhase || "unknown"}`
+    const errorCount = (result.errors || []).length;
+    const phaseTimes = (meta.timings || [])
+      .map((t) => `${t.phase} ${t.ms.toFixed(2)}ms`)
+      .join(", ");
+
+    log(
+      `build finished in ${elapsed}ms — ${meta.sourceLines || 0} lines, ` +
+        `${(result.tokens || []).length} tokens, ${errorCount} problem(s)`
     );
+    if (phaseTimes) log(`  phases: ${phaseTimes}`);
+
+    if (errorCount > 0) {
+      setStatus("error", `Build finished with ${errorCount} problem(s)`);
+      activateOutTab("problems");
+    } else {
+      setStatus("ok", `Build succeeded — reached ${meta.reachedPhase || "?"} in ${elapsed}ms`);
+    }
   } catch (err) {
-    setStatus("error", "failed", `Could not reach the backend: ${err.message}`);
+    setStatus("error", "Backend unreachable");
+    log(`fetch failed: ${err.message}`);
+    activateOutTab("build");
   }
 }
 
 /**
- * Fetch the canonical demo program and load it into the editor.
+ * Load the canonical demo program into the editor.
  * @returns {Promise<void>} Resolves once the editor has been populated.
  */
 async function loadDemo() {
   try {
     const response = await fetch("/api/demo");
     if (!response.ok) {
-      setStatus("error", "failed", `Could not load demo program (HTTP ${response.status}).`);
+      setStatus("error", `Could not load demo program (HTTP ${response.status})`);
       return;
     }
     const data = await response.json();
-    $("#source-editor").value = data.source;
-    updateEditorMeta();
-    setStatus("idle", "idle", "Demo program loaded. Press Compile.");
+    editor.setValue(data.source);
+    setLanguage("minilang");
+    log("loaded demo.ml");
+    setStatus("ready", "Ready — press Build");
   } catch (err) {
-    setStatus("error", "failed", `Could not load demo program: ${err.message}`);
+    setStatus("error", `Could not load demo program: ${err.message}`);
   }
 }
 
 /**
- * Fetch `/api/health` and reflect version and implemented phases in the footer.
- * @returns {Promise<void>} Resolves once the footer has been updated.
+ * Fetch `/api/health` and reflect it in the status bar and sidebar.
+ * @returns {Promise<void>} Resolves once the UI has been updated.
  */
 async function loadHealth() {
   try {
     const response = await fetch("/api/health");
     if (!response.ok) return;
     const data = await response.json();
-    $("#footer-version").textContent = `v${data.version}`;
+    $("#status-version").textContent = `v${data.version}`;
     const phases = data.phasesImplemented || [];
-    $("#footer-phases").textContent =
-      phases.length > 0 ? `phases: ${phases.join(" → ")}` : "phases: none (scaffold)";
+    $("#status-phases").textContent = phases.length
+      ? `phases: ${phases.join(" → ")}`
+      : "phases: none";
+    $$("#phase-list li").forEach((li) =>
+      li.classList.toggle("is-done", phases.includes(li.dataset.phase))
+    );
+    log(`connected to backend v${data.version}`);
   } catch {
-    $("#footer-phases").textContent = "phases: backend unreachable";
+    $("#status-phases").textContent = "backend unreachable";
   }
+}
+
+/* -------------------------------------------------------------------------
+   Language
+   ------------------------------------------------------------------------- */
+
+/**
+ * Switch the editor's highlighting language and update dependent chrome.
+ *
+ * Only MiniLang can be compiled; C, C++ and Java are editing-and-highlighting
+ * only. The status bar says so rather than letting Build fail confusingly.
+ *
+ * @param {string} language - Language id.
+ * @returns {void}
+ */
+function setLanguage(language) {
+  editor.setLanguage(language);
+  $("#language-select").value = language;
+
+  const names = { minilang: "MiniLang", c: "C", cpp: "C++", java: "Java" };
+  const extensions = { minilang: "demo.ml", c: "main.c", cpp: "main.cpp", java: "Main.java" };
+  $("#status-lang").textContent = names[language] || language;
+  $("#file-tab-name").textContent = extensions[language] || "source";
+
+  const compilable = language === "minilang";
+  $("#btn-compile").disabled = !compilable;
+  $("#btn-compile").title = compilable
+    ? "Compile (Ctrl+Enter)"
+    : "The compiler pipeline targets MiniLang only";
+}
+
+/* -------------------------------------------------------------------------
+   Menus
+   ------------------------------------------------------------------------- */
+
+/** Menu definitions: label, optional shortcut, and the action to run. */
+const MENUS = {
+  file: [
+    { label: "Load demo program", key: "", run: loadDemo },
+    { label: "New empty file", key: "", run: () => editor.setValue("") },
+    { sep: true },
+    { label: "Download source…", key: "", run: downloadSource },
+  ],
+  edit: [
+    { label: "Select all", key: "Ctrl+A", run: () => editor.focus() },
+    { label: "Find in tokens", key: "", run: () => { activateTab("lexical"); $("#token-filter").focus(); } },
+  ],
+  build: [
+    { label: "Build", key: "Ctrl+Enter", run: build },
+    { label: "Clear build log", key: "", run: () => { $("#out-build").textContent = ""; } },
+  ],
+  view: [
+    { label: "Toggle output panel", key: "", run: toggleOutput },
+    { sep: true },
+    { label: "Source", key: "Alt+1", run: () => activateTab("source") },
+    { label: "Lexical", key: "Alt+2", run: () => activateTab("lexical") },
+  ],
+  help: [
+    { label: "API documentation", key: "", run: () => window.open("/docs", "_blank") },
+    { label: "Health check", key: "", run: () => window.open("/api/health", "_blank") },
+  ],
+};
+
+/**
+ * Open a menu-bar dropdown beneath its button.
+ * @param {string} name - Menu id, e.g. `"file"`.
+ * @param {Element} button - The button that was clicked.
+ * @returns {void}
+ */
+function openMenu(name, button) {
+  const dropdown = $("#menu-dropdown");
+  const items = MENUS[name] || [];
+  dropdown.innerHTML = items
+    .map((item, i) =>
+      item.sep
+        ? '<div class="menu-sep"></div>'
+        : `<button class="menu-row" data-i="${i}">` +
+          `<span>${esc(item.label)}</span><kbd>${esc(item.key || "")}</kbd></button>`
+    )
+    .join("");
+
+  const rect = button.getBoundingClientRect();
+  dropdown.style.left = `${rect.left}px`;
+  dropdown.style.top = `${rect.bottom + 2}px`;
+  dropdown.hidden = false;
+
+  dropdown.querySelectorAll(".menu-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      closeMenus();
+      const item = items[Number(row.dataset.i)];
+      if (item && item.run) item.run();
+    });
+  });
+
+  $$(".menu-item").forEach((m) => m.classList.toggle("is-open", m.dataset.menu === name));
+}
+
+/**
+ * Close any open menu-bar dropdown.
+ * @returns {void}
+ */
+function closeMenus() {
+  $("#menu-dropdown").hidden = true;
+  $$(".menu-item").forEach((m) => m.classList.remove("is-open"));
+}
+
+/**
+ * Offer the editor's contents as a file download.
+ * @returns {void}
+ */
+function downloadSource() {
+  const names = { minilang: "source.ml", c: "main.c", cpp: "main.cpp", java: "Main.java" };
+  const blob = new Blob([editor.getValue()], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = names[editor.getLanguage()] || "source.txt";
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Collapse or expand the bottom output pane.
+ * @returns {void}
+ */
+function toggleOutput() {
+  const pane = $("#outputpane");
+  const collapsed = pane.classList.toggle("is-collapsed");
+  $("#btn-toggle-output").innerHTML = collapsed ? "&#9652;" : "&#9662;";
+  $("#splitter-output").style.display = collapsed ? "none" : "";
+}
+
+/* -------------------------------------------------------------------------
+   Splitters
+   ------------------------------------------------------------------------- */
+
+/**
+ * Make a splitter drag-resize an adjacent pane.
+ * @param {string} selector - CSS selector of the splitter element.
+ * @param {"x"|"y"} axis - Drag axis.
+ * @param {function(number):void} apply - Called with the new size in pixels.
+ * @returns {void}
+ */
+function makeSplitter(selector, axis, apply) {
+  const splitter = $(selector);
+  if (!splitter) return;
+
+  splitter.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    splitter.classList.add("is-dragging");
+    splitter.setPointerCapture(event.pointerId);
+
+    const move = (moveEvent) => apply(axis === "x" ? moveEvent.clientX : moveEvent.clientY);
+    const up = () => {
+      splitter.classList.remove("is-dragging");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      renderTokenWindow();
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
 }
 
 /* -------------------------------------------------------------------------
@@ -264,26 +593,81 @@ async function loadHealth() {
    ------------------------------------------------------------------------- */
 
 /**
- * Attach all event listeners and perform the initial load.
+ * Create the editor, attach every listener, and perform the initial load.
  * @returns {void}
  */
 function init() {
-  $$(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+  editor = window.CodeEditor.create({
+    mount: "#editor",
+    language: "minilang",
+    onCursor(metrics) {
+      $("#status-caret").textContent = `Ln ${metrics.line}, Col ${metrics.col}`;
+      $("#status-doc").textContent =
+        `${metrics.lines} lines` + (metrics.selected ? `, ${metrics.selected} selected` : "");
+    },
   });
 
-  $("#btn-compile").addEventListener("click", compile);
-  $("#btn-load-demo").addEventListener("click", loadDemo);
-  $("#source-editor").addEventListener("input", updateEditorMeta);
+  $$(".tab").forEach((tab) =>
+    tab.addEventListener("click", () => activateTab(tab.dataset.tab))
+  );
+  $$(".out-tab").forEach((tab) =>
+    tab.addEventListener("click", () => activateOutTab(tab.dataset.out))
+  );
 
-  // Ctrl/Cmd+Enter compiles from anywhere, including inside the editor.
+  $("#btn-compile").addEventListener("click", build);
+  $("#btn-toggle-output").addEventListener("click", toggleOutput);
+  $("#language-select").addEventListener("change", (e) => setLanguage(e.target.value));
+  $("#token-filter").addEventListener("input", () => renderTokens((lastResult || {}).tokens || []));
+  $("#token-viewport").addEventListener("scroll", renderTokenWindow, { passive: true });
+  window.addEventListener("resize", renderTokenWindow);
+
+  $$(".menu-item").forEach((button) =>
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.classList.contains("is-open")) closeMenus();
+      else openMenu(button.dataset.menu, button);
+    })
+  );
+  document.addEventListener("click", closeMenus);
+
+  $$(".tree-file").forEach((file) =>
+    file.addEventListener("click", () => {
+      $$(".tree-file").forEach((f) => f.classList.remove("is-active"));
+      file.classList.add("is-active");
+      if (file.dataset.open === "demo") loadDemo();
+      if (file.dataset.open === "scratch") editor.setValue("");
+      if (file.dataset.open === "grammar" || file.dataset.open === "ambiguous") {
+        activateTab("theory");
+      }
+    })
+  );
+
+  makeSplitter("#splitter-sidebar", "x", (x) => {
+    const width = Math.min(Math.max(x, 150), 460);
+    $("#sidebar").style.width = `${width}px`;
+  });
+  makeSplitter("#splitter-output", "y", (y) => {
+    const height = Math.min(Math.max(window.innerHeight - y, 40), window.innerHeight - 240);
+    $("#outputpane").style.height = `${height}px`;
+  });
+
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
-      compile();
+      build();
     }
+    if (event.altKey && event.key >= "1" && event.key <= "8") {
+      const names = [
+        "source", "lexical", "theory", "syntax",
+        "semantic", "icg", "optimization", "target",
+      ];
+      event.preventDefault();
+      activateTab(names[Number(event.key) - 1]);
+    }
+    if (event.key === "Escape") closeMenus();
   });
 
+  setLanguage("minilang");
   loadHealth();
   loadDemo();
 }

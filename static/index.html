@@ -10,209 +10,277 @@
     works on a machine with no internet access (plan section 13, risk register).
   -->
   <script src="/static/lib/d3.v7.min.js" defer></script>
+  <script src="/static/highlight.js" defer></script>
+  <script src="/static/editor.js" defer></script>
   <script src="/static/viz.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
 
-<header class="app-header">
-  <div class="brand">
-    <span class="brand-mark">&lt;/&gt;</span>
-    <div class="brand-text">
-      <h1>MiniLang</h1>
-      <p>Compiler Visualizer</p>
-    </div>
+<!-- ============================== MENU BAR ============================== -->
+<header class="menubar">
+  <div class="menubar-left">
+    <span class="app-mark">ML</span>
+    <span class="app-title">MiniLang</span>
+    <nav class="menu" role="menubar">
+      <button class="menu-item" data-menu="file" role="menuitem">File</button>
+      <button class="menu-item" data-menu="edit" role="menuitem">Edit</button>
+      <button class="menu-item" data-menu="build" role="menuitem">Build</button>
+      <button class="menu-item" data-menu="view" role="menuitem">View</button>
+      <button class="menu-item" data-menu="help" role="menuitem">Help</button>
+    </nav>
   </div>
 
-  <div class="header-actions">
-    <span id="status-pill" class="pill pill-idle">idle</span>
-    <button id="btn-compile" class="btn btn-primary" type="button">
-      <span class="btn-icon">&#9654;</span> Compile
+  <div class="menubar-right">
+    <label class="field">
+      <span class="field-label">Language</span>
+      <select id="language-select" class="select">
+        <option value="minilang">MiniLang</option>
+        <option value="c">C</option>
+        <option value="cpp">C++</option>
+        <option value="java">Java</option>
+      </select>
+    </label>
+    <button id="btn-compile" class="btn btn-primary" type="button" title="Compile (Ctrl+Enter)">
+      <span class="btn-glyph">&#9654;</span> Build
     </button>
-    <button id="btn-run" class="btn" type="button" disabled>Run</button>
+    <button id="btn-run" class="btn" type="button" disabled title="Run on the stack VM">
+      Run
+    </button>
   </div>
 </header>
 
-<nav class="tabs" role="tablist" aria-label="Compilation phases">
-  <button class="tab is-active" role="tab" data-tab="source"    aria-selected="true">
-    <span class="tab-num">1</span> Source
-  </button>
-  <button class="tab" role="tab" data-tab="lexical"      aria-selected="false">
-    <span class="tab-num">2</span> Lexical
-  </button>
-  <button class="tab" role="tab" data-tab="theory"       aria-selected="false">
-    <span class="tab-num">3</span> Parser Theory
-  </button>
-  <button class="tab" role="tab" data-tab="syntax"       aria-selected="false">
-    <span class="tab-num">4</span> Syntax
-  </button>
-  <button class="tab" role="tab" data-tab="semantic"     aria-selected="false">
-    <span class="tab-num">5</span> Semantic
-  </button>
-  <button class="tab" role="tab" data-tab="icg"          aria-selected="false">
-    <span class="tab-num">6</span> ICG
-  </button>
-  <button class="tab" role="tab" data-tab="optimization" aria-selected="false">
-    <span class="tab-num">7</span> Optimization
-  </button>
-  <button class="tab" role="tab" data-tab="target"       aria-selected="false">
-    <span class="tab-num">8</span> Target
-  </button>
-</nav>
+<!-- Dropdown surface for the menu bar -->
+<div id="menu-dropdown" class="menu-dropdown" hidden></div>
 
-<main class="panels">
+<!-- ================================ BODY ================================ -->
+<div class="workbench">
 
-  <!-- ============================ 1. SOURCE ============================ -->
-  <section class="panel is-active" id="panel-source" role="tabpanel">
-    <div class="panel-head">
-      <h2>Source</h2>
-      <p class="panel-sub">
-        MiniLang source. Everything on every other tab is derived from this one input.
-      </p>
-    </div>
-    <div class="editor-wrap">
-      <div class="editor-toolbar">
-        <button id="btn-load-demo" class="btn btn-ghost btn-sm" type="button">
-          Load demo program
+  <!-- ---------------------------- SIDEBAR ---------------------------- -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">Project</div>
+    <ul class="tree">
+      <li class="tree-group">
+        <span class="tree-caret">&#9662;</span> MiniLang
+        <ul>
+          <li class="tree-file is-active" data-open="demo">
+            <span class="tree-icon">&#9679;</span> demo.ml
+          </li>
+          <li class="tree-file" data-open="scratch">
+            <span class="tree-icon">&#9675;</span> scratch.ml
+          </li>
+        </ul>
+      </li>
+      <li class="tree-group">
+        <span class="tree-caret">&#9662;</span> Grammars
+        <ul>
+          <li class="tree-file" data-open="grammar">
+            <span class="tree-icon">&#9679;</span> expression.g
+          </li>
+          <li class="tree-file" data-open="ambiguous">
+            <span class="tree-icon">&#9679;</span> ambiguous.g
+          </li>
+        </ul>
+      </li>
+    </ul>
+
+    <div class="sidebar-head">Pipeline</div>
+    <ul class="phase-list" id="phase-list">
+      <li data-phase="lexer"><span class="dot"></span> Lexical analysis</li>
+      <li data-phase="parser"><span class="dot"></span> Syntax analysis</li>
+      <li data-phase="semantic"><span class="dot"></span> Semantic analysis</li>
+      <li data-phase="tac"><span class="dot"></span> Intermediate code</li>
+      <li data-phase="optimize"><span class="dot"></span> Optimization</li>
+      <li data-phase="codegen"><span class="dot"></span> Code generation</li>
+    </ul>
+  </aside>
+
+  <div class="splitter" id="splitter-sidebar" role="separator" aria-orientation="vertical"></div>
+
+  <!-- ------------------------------ MAIN ------------------------------ -->
+  <main class="main">
+
+    <nav class="tabstrip" role="tablist" aria-label="Compilation phases">
+      <button class="tab is-active" role="tab" data-tab="source" aria-selected="true">
+        <span class="tab-num">1</span>Source
+      </button>
+      <button class="tab" role="tab" data-tab="lexical" aria-selected="false">
+        <span class="tab-num">2</span>Lexical
+      </button>
+      <button class="tab" role="tab" data-tab="theory" aria-selected="false">
+        <span class="tab-num">3</span>Parser Theory
+      </button>
+      <button class="tab" role="tab" data-tab="syntax" aria-selected="false">
+        <span class="tab-num">4</span>Syntax
+      </button>
+      <button class="tab" role="tab" data-tab="semantic" aria-selected="false">
+        <span class="tab-num">5</span>Semantic
+      </button>
+      <button class="tab" role="tab" data-tab="icg" aria-selected="false">
+        <span class="tab-num">6</span>ICG
+      </button>
+      <button class="tab" role="tab" data-tab="optimization" aria-selected="false">
+        <span class="tab-num">7</span>Optimization
+      </button>
+      <button class="tab" role="tab" data-tab="target" aria-selected="false">
+        <span class="tab-num">8</span>Target
+      </button>
+    </nav>
+
+    <div class="panels">
+
+      <!-- ========================== 1. SOURCE ========================== -->
+      <section class="panel is-active" id="panel-source" role="tabpanel">
+        <div class="editor-shell">
+          <div class="editor-tabbar">
+            <span class="file-tab is-active" id="file-tab-name">demo.ml</span>
+            <span class="editor-hint">Ctrl+Enter to build &middot; Tab to indent</span>
+          </div>
+          <div id="editor" class="editor-mount"></div>
+        </div>
+      </section>
+
+      <!-- ========================== 2. LEXICAL ========================= -->
+      <section class="panel" id="panel-lexical" role="tabpanel">
+        <div class="pane-toolbar">
+          <div class="stat-row" id="token-stats"></div>
+          <div class="toolbar-spacer"></div>
+          <input
+            id="token-filter"
+            class="input input-sm"
+            type="search"
+            placeholder="Filter by type or lexeme…"
+            autocomplete="off" />
+        </div>
+        <div class="empty-state" id="lexical-empty" data-step="press Build">
+          <p>Token table renders here: type, lexeme, line and column.</p>
+        </div>
+        <div id="token-table-wrap" class="virtual-table" hidden>
+          <div class="vt-header">
+            <span class="vt-c-idx">#</span>
+            <span class="vt-c-type">Type</span>
+            <span class="vt-c-cat">Category</span>
+            <span class="vt-c-lex">Lexeme</span>
+            <span class="vt-c-ln">Line</span>
+            <span class="vt-c-col">Col</span>
+          </div>
+          <div class="vt-viewport" id="token-viewport">
+            <div class="vt-spacer" id="token-spacer"></div>
+            <div class="vt-rows" id="token-rows"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 3. PARSER THEORY ====================== -->
+      <section class="panel" id="panel-theory" role="tabpanel">
+        <div class="empty-state" data-step="Tier B &middot; step 8">
+          <p>Paste any grammar &rarr; FIRST/FOLLOW, LL(1), LR(0), SLR and LALR tables,
+             with conflicts highlighted.</p>
+        </div>
+        <div id="theory-wrap" hidden></div>
+      </section>
+
+      <!-- ========================== 4. SYNTAX ========================== -->
+      <section class="panel" id="panel-syntax" role="tabpanel">
+        <div class="empty-state" data-step="Tier A &middot; step 3">
+          <p>D3 parse tree and AST render here; step-through animation arrives in Tier B.</p>
+        </div>
+        <div id="parse-tree-wrap" hidden></div>
+        <div id="parse-trace-wrap" hidden></div>
+      </section>
+
+      <!-- ========================= 5. SEMANTIC ========================= -->
+      <section class="panel" id="panel-semantic" role="tabpanel">
+        <div class="empty-state" data-step="Tier A &middot; step 4">
+          <p>Scoped symbol table and type diagnostics render here.</p>
+        </div>
+        <div id="symbol-table-wrap" hidden></div>
+      </section>
+
+      <!-- ============================ 6. ICG =========================== -->
+      <section class="panel" id="panel-icg" role="tabpanel">
+        <div class="empty-state" data-step="Tier A &middot; step 5">
+          <p>Three-address code, basic blocks and the D3 control-flow graph render here.</p>
+        </div>
+        <div id="tac-wrap" hidden></div>
+        <div id="cfg-wrap" hidden></div>
+      </section>
+
+      <!-- ======================= 7. OPTIMIZATION ======================= -->
+      <section class="panel" id="panel-optimization" role="tabpanel">
+        <div class="pane-toolbar">
+          <div class="opt-toggles" id="opt-toggles">
+            <label class="toggle">
+              <input type="checkbox" data-opt="constantFolding" checked />
+              <span>Constant folding</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" data-opt="constantPropagation" checked />
+              <span>Constant propagation</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" data-opt="deadCodeElimination" checked />
+              <span>Dead code elimination</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" data-opt="commonSubexpressionElimination" />
+              <span>Common subexpression elimination</span>
+            </label>
+          </div>
+        </div>
+        <div class="empty-state" data-step="Tier A &middot; step 6">
+          <p>Side-by-side before/after diff and the instruction-count delta render here.</p>
+        </div>
+        <div id="opt-wrap" hidden></div>
+      </section>
+
+      <!-- ========================== 8. TARGET ========================== -->
+      <section class="panel" id="panel-target" role="tabpanel">
+        <div class="empty-state" data-step="Tier A &middot; step 7">
+          <p>Stack-VM assembly renders here; the Run button executes it.</p>
+        </div>
+        <div id="asm-wrap" hidden></div>
+      </section>
+
+    </div><!-- /.panels -->
+
+    <!-- --------------------------- OUTPUT --------------------------- -->
+    <div class="splitter splitter-h" id="splitter-output" role="separator"
+         aria-orientation="horizontal"></div>
+
+    <section class="outputpane" id="outputpane">
+      <div class="outputpane-tabs">
+        <button class="out-tab is-active" data-out="problems">
+          Problems <span class="badge" id="problem-count">0</span>
         </button>
-        <span class="editor-meta" id="editor-meta">&mdash;</span>
+        <button class="out-tab" data-out="build">Build log</button>
+        <button class="out-tab" data-out="program">Program output</button>
+        <div class="toolbar-spacer"></div>
+        <button class="icon-btn" id="btn-toggle-output" title="Collapse panel">&#9662;</button>
       </div>
-      <textarea
-        id="source-editor"
-        class="editor"
-        spellcheck="false"
-        autocomplete="off"
-        placeholder="func main(): void { ... }"></textarea>
-    </div>
-    <div class="error-list" id="error-list" hidden>
-      <h3>Syntax errors</h3>
-      <div id="error-list-body"></div>
-    </div>
-  </section>
+      <div class="outputpane-body">
+        <div class="out-view is-active" id="out-problems">
+          <div class="out-empty">No problems detected.</div>
+        </div>
+        <pre class="out-view out-log" id="out-build"></pre>
+        <pre class="out-view out-log" id="out-program"></pre>
+      </div>
+    </section>
 
-  <!-- ============================ 2. LEXICAL =========================== -->
-  <section class="panel" id="panel-lexical" role="tabpanel">
-    <div class="panel-head">
-      <h2>Lexical Analysis</h2>
-      <p class="panel-sub">Token stream produced by the hand-written scanner.</p>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 2">
-      <p>Token table renders here: type, lexeme, line, column.</p>
-    </div>
-    <div id="token-table-wrap" hidden></div>
-    <div id="dfa-wrap" hidden></div>
-  </section>
+  </main>
+</div>
 
-  <!-- ========================= 3. PARSER THEORY ======================== -->
-  <section class="panel" id="panel-theory" role="tabpanel">
-    <div class="panel-head">
-      <h2>Parser Theory Lab</h2>
-      <p class="panel-sub">
-        Paste any context-free grammar &rarr; FIRST/FOLLOW, LL(1), LR(0) items, SLR and
-        LALR tables, with conflicts highlighted.
-      </p>
-    </div>
-    <div class="empty-state" data-step="Tier B &middot; step 8">
-      <p>Grammar input, computed sets and parse tables render here.</p>
-    </div>
-    <div id="theory-wrap" hidden></div>
-  </section>
-
-  <!-- ============================ 4. SYNTAX ============================ -->
-  <section class="panel" id="panel-syntax" role="tabpanel">
-    <div class="panel-head">
-      <h2>Syntax Analysis</h2>
-      <p class="panel-sub">Recursive-descent parse tree, and a step-through trace of the stack.</p>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 3">
-      <p>D3 parse tree and AST render here; step-through animation arrives in Tier B.</p>
-    </div>
-    <div id="parse-tree-wrap" hidden></div>
-    <div id="parse-trace-wrap" hidden></div>
-  </section>
-
-  <!-- =========================== 5. SEMANTIC =========================== -->
-  <section class="panel" id="panel-semantic" role="tabpanel">
-    <div class="panel-head">
-      <h2>Semantic Analysis</h2>
-      <p class="panel-sub">Scoped symbol table, type annotations, and type errors.</p>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 4">
-      <p>Symbol table and type diagnostics render here.</p>
-    </div>
-    <div id="symbol-table-wrap" hidden></div>
-  </section>
-
-  <!-- ============================== 6. ICG ============================= -->
-  <section class="panel" id="panel-icg" role="tabpanel">
-    <div class="panel-head">
-      <h2>Intermediate Code</h2>
-      <p class="panel-sub">Three-address code, basic blocks, and the control-flow graph.</p>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 5">
-      <p>TAC listing, basic blocks and the D3 control-flow graph render here.</p>
-    </div>
-    <div id="tac-wrap" hidden></div>
-    <div id="cfg-wrap" hidden></div>
-  </section>
-
-  <!-- ========================= 7. OPTIMIZATION ========================= -->
-  <section class="panel" id="panel-optimization" role="tabpanel">
-    <div class="panel-head">
-      <h2>Optimization</h2>
-      <p class="panel-sub">
-        Toggle each pass independently and watch the instruction count drop.
-      </p>
-    </div>
-    <div class="opt-toggles" id="opt-toggles">
-      <label class="toggle">
-        <input type="checkbox" data-opt="constantFolding" checked />
-        <span>Constant folding</span>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" data-opt="constantPropagation" checked />
-        <span>Constant propagation</span>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" data-opt="deadCodeElimination" checked />
-        <span>Dead code elimination</span>
-      </label>
-      <label class="toggle">
-        <input type="checkbox" data-opt="commonSubexpressionElimination" />
-        <span>Common subexpression elimination <em>(Tier C)</em></span>
-      </label>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 6">
-      <p>Side-by-side before/after diff and the instruction-count delta render here.</p>
-    </div>
-    <div id="opt-wrap" hidden></div>
-  </section>
-
-  <!-- ============================ 8. TARGET ============================ -->
-  <section class="panel" id="panel-target" role="tabpanel">
-    <div class="panel-head">
-      <h2>Target Code</h2>
-      <p class="panel-sub">Stack-VM assembly, and the program's real output.</p>
-    </div>
-    <div class="empty-state" data-step="Tier A &middot; step 7">
-      <p>Generated assembly renders here; the Run button executes it on the stack VM.</p>
-    </div>
-    <div id="asm-wrap" hidden></div>
-    <div class="output-wrap">
-      <h3>Program output</h3>
-      <pre id="program-output" class="output">&mdash;</pre>
-    </div>
-  </section>
-
-</main>
-
-<footer class="app-footer">
-  <span id="footer-status">Ready.</span>
-  <span class="footer-right">
-    <span id="footer-phases">phases: none</span>
-    <span class="sep">&middot;</span>
-    <span id="footer-version">v&mdash;</span>
-  </span>
+<!-- ============================= STATUS BAR ============================= -->
+<footer class="statusbar">
+  <span class="status-cell" id="status-state">Ready</span>
+  <span class="status-cell" id="status-caret">Ln 1, Col 1</span>
+  <span class="status-cell" id="status-doc">0 lines</span>
+  <div class="toolbar-spacer"></div>
+  <span class="status-cell" id="status-tokens">&mdash;</span>
+  <span class="status-cell" id="status-phases">phases: &mdash;</span>
+  <span class="status-cell" id="status-lang">MiniLang</span>
+  <span class="status-cell">UTF-8</span>
+  <span class="status-cell" id="status-version">v&mdash;</span>
 </footer>
 
 </body>
