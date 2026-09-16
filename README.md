@@ -1,6 +1,6 @@
 # MiniLang Compiler Visualizer
 
-[![CI](https://github.com/hardikahujaa/MiniLang-CVT/actions/workflows/ci.yml/badge.svg)](https://github.com/hardikahujaa/MiniLang-CVT/actions/workflows/ci.yml)
+[![CI](https://github.com/hardikahujaa/MiniLang/actions/workflows/ci.yml/badge.svg)](https://github.com/hardikahujaa/MiniLang/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Linted with ruff](https://img.shields.io/badge/linted%20with-ruff-261230.svg)](https://github.com/astral-sh/ruff)
@@ -13,10 +13,19 @@ exposed as JSON and visualised live in the browser. It also ships a standalone
 detection) and a **syntax error recovery system** that suggests ranked fixes
 instead of collapsing into a cascade of false errors.
 
-> **Status:** Tier A step 1 of 7 — project scaffold. The server runs, the
-> eight-tab UI is served, and `/compile` returns the full JSON contract with
-> every phase's slot present but empty. Compiler phases land one per step; see
-> [Build status](#build-status).
+The frontend is a real IDE, not a form: syntax-highlighted editor with a line
+gutter, project tree, build log, problems list, and a status bar — dark theme,
+no npm, no build step.
+
+> **Status:** Tier A step 2 of 7 — the lexer is live. Press **Build** and the
+> Lexical tab fills with the real token stream. Remaining phases land one per
+> step; see [Build status](#build-status).
+
+## Quick start
+
+**Windows — double-click [`run.bat`](run.bat).** It creates the virtual
+environment if needed, installs dependencies on first run, picks a free port and
+opens your browser. Everything below is the manual equivalent.
 
 ---
 
@@ -50,12 +59,16 @@ truth.
 ```
                           BROWSER (no npm, no build step)
    ┌──────────────────────────────────────────────────────────────────┐
-   │  static/index.html   8 tabs: Source · Lexical · Parser Theory ·  │
-   │                      Syntax · Semantic · ICG · Optimization ·    │
-   │                      Target                                     │
-   │  static/app.js       one fetch, then one render pass per tab     │
-   │  static/viz.js       D3 drawing (parse tree, CFG, automata)      │
-   │  static/lib/d3.js    VENDORED — the demo needs no internet       │
+   │  IDE shell   menu bar · project tree · 8 tabs · output pane ·    │
+   │              status bar                                          │
+   │                                                                  │
+   │  index.html    markup only                                       │
+   │  editor.js     gutter + paint + transparent textarea             │
+   │  highlight.js  colouring for MiniLang, C, C++, Java              │
+   │  app.js        one fetch, one render pass per tab; the token      │
+   │                table is windowed so long programs stay smooth     │
+   │  viz.js        D3 drawing (parse tree, CFG, automata)            │
+   │  lib/d3.js     VENDORED — the demo needs no internet             │
    └───────────────────────────────┬──────────────────────────────────┘
                                    │  POST /compile   {source, toggles}
                                    │  POST /run       {asm}
@@ -159,8 +172,8 @@ repeated `(3 + 4)` (common subexpression elimination).
 Requires **Python 3.10+**. There is no npm, no bundler, and no build step.
 
 ```bash
-git clone https://github.com/hardikahujaa/MiniLang-CVT.git
-cd MiniLang-CVT
+git clone https://github.com/hardikahujaa/MiniLang.git
+cd MiniLang
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -194,15 +207,24 @@ natural-language explanation strings.
 ## Running the tests
 
 ```bash
-pytest                                        # the suite
+pytest                                        # the suite (371 tests)
 pytest --cov=app --cov-report=term-missing    # with coverage
 ruff check .                                  # lint
 black --check .                               # formatting
+node --check static/app.js                    # JavaScript syntax
 ```
 
-CI runs all four on every push, against Python 3.10 and 3.12, and additionally
-boots the server and hits `/api/health`, `/`, and `/compile` to prove the app
-actually starts — a green unit-test run alone does not.
+CI runs all of these on every push, against Python 3.10 and 3.12, and
+additionally boots the server and hits `/api/health`, `/`, every static asset
+and `/compile` to prove the app actually starts and really produces tokens — a
+green unit-test run alone does not.
+
+The suite includes cross-layer contract tests, because nothing else would catch
+these: that every DOM id `app.js` queries exists in the markup, that the
+optimisation checkbox names match the Pydantic aliases exactly, that the virtual
+table's row height in JavaScript matches the stylesheet, that the editor's two
+layers never disagree on a glyph metric, and that the editor highlights exactly
+the keywords the real lexer reserves.
 
 ---
 
@@ -232,7 +254,7 @@ demoable increment.
 | # | Step                                                   | Status |
 |---|--------------------------------------------------------|--------|
 | 1 | Scaffold: FastAPI, 8-tab UI, stubbed `/compile`, CI     | ✅ done |
-| 2 | Lexer + token table                                     | ⬜ next |
+| 2 | Lexer + token table + IDE frontend                      | ✅ done |
 | 3 | AST + recursive descent parser + D3 parse tree          | ⬜      |
 | 4 | Semantic analysis + symbol table                        | ⬜      |
 | 5 | TAC generation + basic blocks + CFG                     | ⬜      |
@@ -253,7 +275,66 @@ demoable increment.
 ### Tier C — upside
 
 regex → NFA → DFA animation · common subexpression elimination · LLM
-explanation layer · deployment · loop-invariant code motion.
+explanation layer · deployment · loop-invariant code motion ·
+**multi-language lexing** (drive the existing scanner from a per-language
+keyword table so the Lexical tab works for C, C++ and Java too).
+
+---
+
+## The editor
+
+The Source tab is a genuine editor component, not a `<textarea>` with a border.
+
+| Feature | Notes |
+|---|---|
+| Syntax highlighting | MiniLang, C, C++, Java |
+| Line-number gutter | Scrolls in lockstep with the code |
+| Current-line highlight | Follows the caret |
+| Auto-indent | Enter keeps indentation and adds a level after `{` |
+| Tab / Shift+Tab | Insert and remove one indent level; never moves focus |
+| Go to problem | Click any entry in the Problems panel to jump to it |
+| Native undo/redo | Preserved — see the note below |
+| `Ctrl`+`Enter` | Build |
+| `Alt`+`1`…`8` | Jump to a tab |
+
+**How it is built.** Three layers share one container: a gutter, a `<pre>`
+holding highlighted HTML, and a transparent `<textarea>` that owns the caret,
+selection, clipboard, undo stack and IME. The transparent-textarea approach is
+used instead of `contenteditable` precisely so that native editing behaviour
+keeps working — `contenteditable` would mean reimplementing undo, accessibility
+and mobile keyboards by hand, badly. The catch is that the paint and input
+layers must render glyphs at identical positions or the caret drifts, so every
+metric that affects glyph placement is declared once, on `.editor-layer`, and
+[a test](tests/test_frontend.py) fails if either layer overrides one.
+
+### Behaviour on long programs
+
+Two places would otherwise stall, and both are handled and tested:
+
+| Concern | Approach |
+|---|---|
+| Repainting while typing | Debounced; above ~180 000 characters highlighting is disabled and the editor falls back to plain text, because the cost is parsing generated HTML, not scanning |
+| Rendering the token table | Windowed — only the rows on screen exist in the DOM, so a 20 000-token program creates about 40 row elements, not 20 000 |
+| Finding the caret's line | Cached, not recomputed per scroll event, which would otherwise be O(document) at 60 fps |
+
+### Other languages
+
+The editor highlights **C, C++ and Java** in addition to MiniLang, so it is
+useful for reading the kind of code this course deals with.
+
+**To be exact about what that does and does not mean:** the compiler pipeline
+targets MiniLang only. Tabs 2–8 are driven by `app/`'s own lexer, parser and
+code generator, and those implement MiniLang's grammar. Selecting C, C++ or
+Java gives you editing and colouring; the **Build** button is disabled and the
+status bar says why, rather than failing confusingly.
+
+Writing real front ends for C, C++ and Java is not a scoping question — each is
+a multi-year project on its own, and C++ is among the hardest languages in
+existence to parse. Shelling out to `gcc` or `javac` instead would produce a
+wrapper around someone else's compiler, which is the opposite of what this
+project demonstrates. The genuinely feasible extension is **lexing** those
+languages with the existing scanner driven by a per-language keyword table —
+see [Build status](#build-status).
 
 ---
 
@@ -277,22 +358,26 @@ _To be added as each phase lands._
 ## Project layout
 
 ```
-MiniLang-CVT/
+MiniLang/
 ├── app/
 │   ├── main.py             FastAPI routes; thin orchestrator
+│   ├── lexer.py            phase 1: hand-written tokenizer
 │   ├── schemas.py          the /compile JSON contract, as typed models
 │   ├── logging_config.py   structured JSON logging
 │   ├── samples.py          canonical demo program and grammars
 │   └── …                   one module per phase, added per build step
 ├── static/
-│   ├── index.html          all 8 tabs
-│   ├── app.js              fetch + render
+│   ├── index.html          IDE shell: menu, sidebar, 8 tabs, output pane
+│   ├── app.js              controller: fetch + render, windowed token table
+│   ├── editor.js           the code editor component (gutter, layers, keys)
+│   ├── highlight.js        syntax colouring for MiniLang, C, C++, Java
 │   ├── viz.js              D3 drawing
-│   ├── style.css
+│   ├── style.css           dark theme
 │   └── lib/d3.v7.min.js    vendored, so the demo works offline
 ├── tests/
 │   ├── programs/           valid MiniLang programs
 │   └── buggy/              programs with seeded syntax errors (Tier B)
+├── run.bat                 one-click launcher (Windows)
 ├── .github/workflows/ci.yml
 ├── pyproject.toml          black · ruff · pytest configuration
 ├── requirements.txt

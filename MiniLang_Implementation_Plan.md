@@ -335,3 +335,119 @@ Feed these one at a time. Verify each runs before moving on. Never ask for the w
 | You can't explain your own code in the viva | Reserve 20 min after each sprint day to read what was generated. This is the one place effort is mandatory |
 
 That last row is the real risk in an AI-built project. The code will be fine. Budget the time to understand it, because the viva is where 30/30 is won or lost.
+
+---
+
+# Addendum A — amendments made during the build
+
+*Added 2026-09-17. The plan above is unchanged and remains the spec. This
+section records decisions taken while building that the original plan did not
+cover, so the two do not disagree.*
+
+## A.1 The frontend is an IDE, not a minimal UI
+
+The plan says "minimal 8-tab UI" (Tier A item 7). That was the right call for
+effort, but the Source tab is the screen the examiner looks at longest, so the
+editor was upgraded to a real component:
+
+* line-number gutter, syntax highlighting, current-line band
+* auto-indent, Tab / Shift+Tab indentation, preserved native undo
+* click a problem to jump to its line and column
+* IDE chrome: menu bar, project tree, build log, problems panel, status bar
+* dark theme only
+
+Still no npm, no bundler, no framework, no CDN. The whole thing is three
+hand-written scripts plus the vendored D3.
+
+**Implementation note for the viva.** The editor is a transparent `<textarea>`
+stacked over a `<pre>` of highlighted HTML, with a gutter beside them. This
+keeps native undo/redo, clipboard, IME and accessibility, which
+`contenteditable` would force you to reimplement. The cost is that both layers
+must render glyphs at identical positions, so every metric affecting glyph
+placement is declared once in CSS and a test enforces it.
+
+## A.2 Long programs are a stated requirement
+
+Two hot spots, both handled and tested:
+
+| Concern | Approach |
+|---|---|
+| Token table with thousands of rows | Windowed rendering — only visible rows are in the DOM |
+| Repainting the editor while typing | Debounced; highlighting disables itself above ~180k characters |
+| Locating the caret's line | Cached, not recomputed per scroll event (would be O(n) at 60 fps) |
+
+## A.3 Other languages — what is and is not feasible
+
+**Requested:** make the IDE work for Java, C and C++.
+
+**Delivered now:** the editor highlights all four languages (MiniLang, C, C++,
+Java). The language picker changes colouring; the file tab and status bar
+follow.
+
+**Deliberately not delivered:** compiling them. Being exact about why, because
+this is a viva-relevant judgement:
+
+1. **Writing real front ends for C, C++ and Java is not a scoping problem.**
+   Each is a multi-year project. C++ is among the hardest languages in existence
+   to parse — its grammar is not context-free, and `a * b;` cannot be
+   disambiguated without full name resolution.
+2. **Shelling out to `gcc` or `javac` would be worse than useless here.** It
+   would produce a wrapper around someone else's compiler. Tabs 2–8 would go
+   blank, because there would be no token stream, AST, symbol table, TAC or
+   assembly *of ours* to show. The entire project premise — one input visibly
+   travelling through every phase of one compiler you wrote — would be gone,
+   and with it the resume line and the novelty feature.
+3. **Build is disabled, not broken.** Selecting C, C++ or Java disables the
+   Build button and the status bar explains why, rather than failing with a
+   confusing error.
+
+**The feasible extension, added to Tier C.** A lexer is essentially a keyword
+table plus character classes, so `app/lexer.py` can be parameterised by
+language and the **Lexical tab made to work for C, C++ and Java** — perhaps a
+day's work. It is also pedagogically good: "same scanner, four keyword tables"
+demonstrates exactly what is and is not language-specific about lexical
+analysis. Phases 2–6 stay MiniLang, which is what the course requires anyway.
+
+## A.4 Engineering bars added beyond the plan
+
+Enforced throughout, not retrofitted at the end:
+
+* type hints and Google-style docstrings everywhere, enforced by ruff `ANN`/`D`
+* no `print()` in backend code (`T20`), no blind excepts (`BLE`)
+* black at 100 columns; one config in `pyproject.toml` shared by CI
+* every `app/` module has a matching `tests/` file with edge cases and at least
+  one deliberately malformed input per phase
+* GitHub Actions CI on Python 3.10 and 3.12, which also boots the server and
+  asserts it really produces tokens — a green unit-test run does not prove the
+  app starts
+* `node --check` on every script, since there is no bundler to catch a syntax
+  error before the browser does
+* cross-layer contract tests where no type checker spans the boundary
+* conventional-commit history, one commit per coherent unit
+* no secrets in the repository; every environment variable optional
+
+## A.5 Revised build status
+
+| Tier | Step | Status |
+|---|---|---|
+| A | 1. Scaffold, 8-tab UI, stubbed `/compile`, CI | done |
+| A | 2. Lexer + token table + IDE frontend | done |
+| A | 3. AST + recursive descent parser + D3 parse tree | next |
+| A | 4. Semantic analysis + symbol table | |
+| A | 5. TAC + basic blocks + CFG | |
+| A | 6. Constant folding, propagation, DCE + toggles | |
+| A | 7. Codegen + stack VM + Run | |
+| B | 8-13. Parser theory lab, step animation, error recovery, benchmark | |
+| C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
+
+## A.6 Operational notes
+
+* **Run it with `run.bat`** (double-click). This machine has a Python on `PATH`
+  belonging to Inkscape that has no pip, and a second `uvicorn` belonging to the
+  system Python without the project's dependencies. Running the wrong one gives
+  a confusing `ModuleNotFoundError`, which is what made the app appear broken.
+  The launcher always uses the project's own virtual environment.
+* **Repository:** `https://github.com/hardikahujaa/MiniLang.git`
+* **Line endings** are pinned to LF via `.gitattributes`, because Git for
+  Windows defaults to `core.autocrlf=true` and the suite compares a fixture
+  byte-for-byte against a Python constant.

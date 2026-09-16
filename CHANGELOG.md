@@ -12,6 +12,73 @@ list of commits.
 
 ## [Unreleased]
 
+### Tier A · Step 2 — Lexer, and an IDE-grade frontend
+
+#### Added
+
+- **`app/lexer.py`** — phase 1 of the compiler. A hand-written, single-pass
+  scanner producing tokens with exact 1-based line and column. Chosen over a
+  regex-driven scanner because error recovery needs precise positions and
+  specific messages ("invalid float literal `3.4.5`: more than one decimal
+  point", not "no rule matched at offset 214"). Character classes are explicit
+  ASCII range checks rather than `str.isalpha`/`str.isdigit`, which are
+  Unicode-aware and would silently accept accented identifiers.
+- **Error recovery in the scanner.** Malformed input never raises; it is
+  collected and scanning continues. Where intent is unambiguous the scanner also
+  repairs — a lone `&` reports the mistake, suggests `&&`, and emits that token
+  so later phases still run.
+- **A real editor** (`static/editor.js`) — line-number gutter, syntax
+  highlighting, current-line band, auto-indent, Tab/Shift+Tab indentation,
+  go-to-problem, and preserved native undo. Built from a transparent textarea
+  over a highlighted `<pre>` rather than `contenteditable`, so undo, IME and
+  accessibility keep working.
+- **IDE shell** — menu bar, project tree, per-phase progress list, build log,
+  problems panel and status bar with live Ln/Col. Dark theme only.
+- **Syntax highlighting for C, C++ and Java** (`static/highlight.js`) in
+  addition to MiniLang. Editing and colouring only: the compiler pipeline
+  targets MiniLang, and Build is disabled with an explanation for the others.
+- **`run.bat`** — one-click launcher. This machine has a Python on `PATH`
+  belonging to Inkscape with no pip, and a second `uvicorn` belonging to the
+  system Python without the project's dependencies; running the wrong one gave a
+  confusing `ModuleNotFoundError`. The launcher always uses the project venv.
+- **JavaScript syntax gate** — `node --check` in both the test suite and CI.
+  Previously a stray character in `app.js` would break the entire UI with every
+  Python test still green.
+- **Cross-layer contract tests** — that the virtual table's row height agrees
+  between JS and CSS, that the editor's two layers never disagree on a glyph
+  metric, and that the editor highlights exactly the keywords the real lexer
+  reserves.
+
+#### Changed
+
+- `POST /compile` runs the lexer and returns real tokens; `IMPLEMENTED_PHASES`
+  gains `"lexer"` and `meta.timings` gains a per-phase entry.
+- `Token` gains an optional `category` field so the token table can colour-code
+  rows without duplicating the type-to-category mapping in JavaScript.
+- Test count: 109 → 371.
+
+#### Performance
+
+Long programs were treated as a requirement, not an afterthought:
+
+- The token table is **windowed** — only on-screen rows exist in the DOM, so a
+  20 000-token program creates about 40 row elements.
+- Repainting the editor is debounced, and highlighting disables itself above
+  ~180 000 characters, where the cost is parsing generated HTML rather than
+  scanning.
+- The caret's line is cached rather than recomputed on every scroll event, which
+  would otherwise be O(document length) at 60 fps.
+
+#### Fixed
+
+- Commit authorship on the ten scaffold commits, which used an address not
+  registered to the GitHub account and so attributed every commit to an unlinked
+  stranger. Rewritten before pushing; the base commit was left untouched.
+- The `origin` remote and every README URL, which pointed at a different
+  repository than the one this project lives in.
+
+---
+
 ### Tier A · Step 1 — Project scaffold
 
 The goal of this step was narrow and deliberate: get `uvicorn app.main:app
