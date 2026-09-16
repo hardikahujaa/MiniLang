@@ -649,7 +649,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .out-empty { color: var(--fg-faint); font-size: 12px; padding: 4px 2px; }
 
-.problem {
+.problem-item {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -658,12 +658,53 @@ ul { margin: 0; padding: 0; list-style: none; }
   font: 12px var(--mono);
   cursor: pointer;
 }
-.problem:hover { background: var(--bg-hover); }
+.problem-item:hover { background: var(--bg-hover); }
 .problem-sev { color: var(--err); flex: 0 0 auto; }
 .problem-sev.is-warn { color: var(--warn); }
 .problem-pos { color: var(--accent); flex: 0 0 auto; }
 .problem-msg { color: var(--fg); }
 .problem-fix { color: var(--ok); }
+
+.problems-list { display: flex; flex-direction: column; gap: 1px; }
+
+/* ----------------------- 10b. Parse tree (Syntax tab) -------------------- */
+.tree-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-editor);
+  cursor: grab;
+}
+.tree-host:active { cursor: grabbing; }
+
+.tree-svg { display: block; }
+
+.tree-link {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.4px;
+}
+
+.tree-node { cursor: pointer; }
+.tree-node circle { transition: r 0.12s ease; }
+.tree-node:hover circle { r: 6; }
+
+.tree-node text {
+  font: 11.5px var(--mono);
+  fill: var(--fg-muted);
+  paint-order: stroke;
+  stroke: var(--bg-editor);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.tree-node:hover text { fill: var(--fg); }
+
+.viz-placeholder {
+  color: var(--fg-faint);
+  font-size: 13px;
+  text-align: center;
+  padding: 28px 0;
+}
 
 /* ---------------------------- 11. Status bar ----------------------------- */
 .statusbar {

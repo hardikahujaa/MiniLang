@@ -35,6 +35,12 @@ let visibleTokens = [];
 /** The editor instance, created on DOMContentLoaded. */
 let editor = null;
 
+/** Handle returned by Viz.renderTree, exposing expand/collapse/reset. */
+let treeHandle = null;
+
+/** The AST most recently returned by /compile, kept for re-rendering. */
+let lastAst = null;
+
 /* -------------------------------------------------------------------------
    DOM helpers
    ------------------------------------------------------------------------- */
@@ -116,8 +122,11 @@ function activateTab(name) {
   $$(".panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `panel-${name}`);
   });
-  // The virtual table measures its viewport, which is zero while hidden.
+  // Both of these measure their container, which is zero while hidden.
   if (name === "lexical") renderTokenWindow();
+  if (name === "syntax" && lastAst && !treeHandle) {
+    treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
+  }
 }
 
 /**
@@ -245,7 +254,7 @@ function renderProblems(errors, typeErrors) {
   badge.textContent = String(all.length);
   badge.classList.toggle("has-errors", all.length > 0);
 
-  const host = $("#out-problems");
+  const host = $("#problems-list");
   if (all.length === 0) {
     host.innerHTML = '<div class="out-empty">No problems detected.</div>';
     return;
@@ -254,7 +263,7 @@ function renderProblems(errors, typeErrors) {
   host.innerHTML = all
     .map(
       (p, i) =>
-        `<div class="problem" data-i="${i}" data-line="${p.line}" data-col="${p.col}">` +
+        `<div class="problem-item" data-i="${i}" data-line="${p.line}" data-col="${p.col}">` +
         `<span class="problem-sev${p.severity === "warning" ? " is-warn" : ""}">` +
         `${p.severity === "warning" ? "warn" : "error"}</span>` +
         `<span class="problem-pos">${p.line}:${p.col}</span>` +
@@ -264,7 +273,7 @@ function renderProblems(errors, typeErrors) {
     )
     .join("");
 
-  host.querySelectorAll(".problem").forEach((row) => {
+  host.querySelectorAll(".problem-item").forEach((row) => {
     row.addEventListener("click", () => {
       activateTab("source");
       editor.goTo(Number(row.dataset.line), Number(row.dataset.col));
@@ -277,6 +286,40 @@ function renderProblems(errors, typeErrors) {
    ------------------------------------------------------------------------- */
 
 /**
+ * Render the abstract syntax tree on the Syntax tab.
+ *
+ * Drawing is skipped while the panel is hidden: an SVG laid out inside a
+ * `display: none` container measures zero and would render collapsed into the
+ * corner. `activateTab` calls back here once the panel is visible.
+ *
+ * @param {Object|null} ast - The serialised root node, or null if parsing failed.
+ * @returns {void}
+ */
+function renderAst(ast) {
+  lastAst = ast;
+
+  const hasTree = Boolean(ast);
+  $("#syntax-empty").hidden = hasTree;
+  $("#parse-tree-wrap").hidden = !hasTree;
+  $("#tree-toolbar").hidden = !hasTree;
+
+  if (!hasTree) {
+    treeHandle = null;
+    window.Viz.clear("#parse-tree-wrap");
+    return;
+  }
+
+  const stats = window.Viz.measure(ast);
+  $("#tree-stats").innerHTML =
+    `<span><b>${stats.nodes}</b> nodes</span><span>depth <b>${stats.depth}</b></span>` +
+    `<span><b>${ast.functionCount || 0}</b> functions</span>`;
+
+  if ($("#panel-syntax").classList.contains("is-active")) {
+    treeHandle = window.Viz.renderTree("#parse-tree-wrap", ast);
+  }
+}
+
+/**
  * Dispatch a `/compile` response to every tab's renderer.
  * @param {Object} result - The parsed `CompileResponse`.
  * @returns {void}
@@ -285,6 +328,7 @@ function renderResult(result) {
   lastResult = result;
 
   renderTokens(result.tokens || []);
+  renderAst(result.ast || null);
   renderProblems(result.errors, result.typeErrors);
 
   $("#out-program").textContent = result.output || "";
@@ -331,6 +375,7 @@ async function build() {
   }
 
   setStatus("working", "Building…");
+  treeHandle = null;
   const started = performance.now();
 
   try {
@@ -616,6 +661,9 @@ function init() {
 
   $("#btn-compile").addEventListener("click", build);
   $("#btn-toggle-output").addEventListener("click", toggleOutput);
+  $("#btn-tree-expand").addEventListener("click", () => treeHandle && treeHandle.expandAll());
+  $("#btn-tree-collapse").addEventListener("click", () => treeHandle && treeHandle.collapseAll());
+  $("#btn-tree-reset").addEventListener("click", () => treeHandle && treeHandle.resetView());
   $("#language-select").addEventListener("change", (e) => setLanguage(e.target.value));
   $("#token-filter").addEventListener("input", () => renderTokens((lastResult || {}).tokens || []));
   $("#token-viewport").addEventListener("scroll", renderTokenWindow, { passive: true });
