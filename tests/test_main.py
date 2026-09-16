@@ -261,6 +261,68 @@ class TestGrammarEndpoint:
         assert client.post("/analyze-grammar", json=payload).status_code == 422, reason
 
 
+class TestSyntaxAnalysis:
+    """Phase 2 as seen through the API."""
+
+    def test_valid_source_returns_an_ast(self, client: TestClient, demo_source: str):
+        body = client.post("/compile", json={"source": demo_source}).json()
+        assert body["ast"] is not None
+        assert body["ast"]["node"] == "Program"
+        assert body["ast"]["functionCount"] == 2
+        assert body["meta"]["reachedPhase"] == "parser"
+
+    def test_ast_is_shaped_for_the_tree_renderer(self, client: TestClient, demo_source: str):
+        """D3's hierarchy layout reads `name` and `children` by default."""
+        ast = client.post("/compile", json={"source": demo_source}).json()["ast"]
+        assert isinstance(ast["name"], str)
+        assert isinstance(ast["children"], list)
+        assert ast["children"], "the demo program has functions to draw"
+
+    def test_syntax_error_is_reported_and_ast_is_null(self, client: TestClient):
+        body = client.post("/compile", json={"source": "func m(): void { int x = 5 }"}).json()
+        assert body["ast"] is None
+        assert len(body["errors"]) == 1
+        assert "';'" in body["errors"][0]["message"]
+        assert body["meta"]["ok"] is False
+        assert body["meta"]["reachedPhase"] == "lexer"
+
+    def test_syntax_error_carries_position_and_expected_set(self, client: TestClient):
+        source = "func m(): void {\n    int x = 5\n}"
+        error = client.post("/compile", json={"source": source}).json()["errors"][0]
+        assert error["line"] == 3
+        assert error["col"] >= 1
+        assert error["expected"] == [";"]
+        assert error["recovered"] is False
+
+    def test_tokens_are_still_returned_when_parsing_fails(self, client: TestClient):
+        """A failed parse must not blank the Lexical tab."""
+        body = client.post("/compile", json={"source": "func m(): void { int x = 5 }"}).json()
+        assert len(body["tokens"]) > 5
+
+    def test_parsing_runs_even_after_a_lexical_error(self, client: TestClient):
+        """The lexer recovers, so the stream is still complete enough to parse."""
+        body = client.post("/compile", json={"source": "func m(): void { if (a & b) { } }"}).json()
+        assert len(body["errors"]) >= 1
+        assert body["ast"] is not None
+
+    def test_pathological_nesting_is_an_error_not_a_500(self, client: TestClient):
+        """Unbounded recursive descent would raise RecursionError and 500 here."""
+        depth = 400
+        source = f"func m(): void {{ int x = {'(' * depth}1{')' * depth}; }}"
+        response = client.post("/compile", json={"source": source})
+        assert response.status_code == 200
+        assert any("too deep" in e["message"] for e in response.json()["errors"])
+
+    def test_timings_include_the_parser_phase(self, client: TestClient, demo_source: str):
+        timings = client.post("/compile", json={"source": demo_source}).json()["meta"]["timings"]
+        phases = [t["phase"] for t in timings]
+        assert "lexer" in phases
+        assert "parser" in phases
+
+    def test_health_reports_both_phases(self, client: TestClient):
+        assert client.get("/api/health").json()["phasesImplemented"] == ["lexer", "parser"]
+
+
 class TestOpenApi:
     """The generated OpenAPI document, which is also the API's documentation."""
 
