@@ -65,18 +65,37 @@ jobs:
 
       - name: Verify the app boots and serves the UI
         # A green unit-test run does not prove the server actually starts, so
-        # boot it for real and hit the two routes the demo depends on.
+        # boot it for real and exercise the routes the demo depends on.
+        #
+        # These assertions check for *artefacts*, not for schema keys. An
+        # earlier version grepped for '"parseTrace"', which is present as an
+        # empty list in every response and so passed even when no phase ran.
         run: |
           uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8000/api/health > /dev/null; then break; fi
             sleep 1
           done
-          curl -sf http://127.0.0.1:8000/api/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+          curl -sf http://127.0.0.1:8000/api/health | tee /dev/stderr | grep -q '"parser"'
           curl -sf http://127.0.0.1:8000/ | grep -q "MiniLang"
+
+          for asset in style.css app.js editor.js highlight.js viz.js lib/d3.v7.min.js; do
+            curl -sf "http://127.0.0.1:8000/static/$asset" > /dev/null
+          done
+
+          RESPONSE=$(curl -sf -X POST http://127.0.0.1:8000/compile \
+            -H 'Content-Type: application/json' \
+            -d '{"source":"func main(): void { print(1); }"}')
+          echo "$RESPONSE" | head -c 400
+          # Phase 1 really tokenised, and phase 2 really built a tree.
+          echo "$RESPONSE" | grep -q '"type":"FUNC"'
+          echo "$RESPONSE" | grep -q '"node":"Program"'
+
+          # A syntax error must be reported, not crash the endpoint.
           curl -sf -X POST http://127.0.0.1:8000/compile \
             -H 'Content-Type: application/json' \
-            -d '{"source":"func main(): void {}"}' | grep -q '"parseTrace"'
+            -d '{"source":"func main(): void { int x = 1 }"}' | grep -q 'expected'
 
       - name: Upload coverage report
         if: matrix.python-version == '3.12'
