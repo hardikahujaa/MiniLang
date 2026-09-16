@@ -286,6 +286,45 @@ function renderProblems(errors, typeErrors) {
    ------------------------------------------------------------------------- */
 
 /**
+ * Say why the Syntax tab has no tree, instead of showing a static placeholder.
+ *
+ * There are three distinct reasons, and a single "press Build" message is wrong
+ * for two of them. The third is the important one: if the pipeline stopped at
+ * the lexer with nothing to report, the backend is almost certainly running
+ * code from before the parser was wired -- uvicorn reloads static files on
+ * every request but not Python modules unless started with --reload. That
+ * presents as a silently empty tab, which is very hard to diagnose from the
+ * outside, so the UI names it.
+ *
+ * @returns {void}
+ */
+function explainMissingTree() {
+  const host = $("#syntax-empty");
+  const meta = (lastResult && lastResult.meta) || null;
+  const errors = (lastResult && lastResult.errors) || [];
+
+  let step = "press Build";
+  let message = "The parse tree renders here. Click a node to fold it, scroll to zoom, drag to pan.";
+
+  if (meta && errors.length > 0) {
+    step = "parse failed";
+    message =
+      `The program has ${errors.length} problem(s), so no tree was built. ` +
+      "See the Problems panel below - click an entry to jump to it.";
+  } else if (meta && meta.reachedPhase === "lexer") {
+    step = "stale backend?";
+    message =
+      "The backend tokenised this program but returned no syntax tree, and reported " +
+      "no errors. That usually means the server is running code from before the parser " +
+      "was added. Restart it (run.bat, or uvicorn app.main:app --reload).";
+  }
+
+  host.dataset.step = step;
+  const paragraph = host.querySelector("p");
+  if (paragraph) paragraph.textContent = message;
+}
+
+/**
  * Render the abstract syntax tree on the Syntax tab.
  *
  * Drawing is skipped while the panel is hidden: an SVG laid out inside a
@@ -306,6 +345,7 @@ function renderAst(ast) {
   if (!hasTree) {
     treeHandle = null;
     window.Viz.clear("#parse-tree-wrap");
+    explainMissingTree();
     return;
   }
 
