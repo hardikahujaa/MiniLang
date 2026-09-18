@@ -432,8 +432,8 @@ Enforced throughout, not retrofitted at the end:
 |---|---|---|
 | A | 1. Scaffold, 8-tab UI, stubbed `/compile`, CI | done |
 | A | 2. Lexer + token table + IDE frontend | done |
-| A | 3. AST + recursive descent parser + D3 parse tree | next |
-| A | 4. Semantic analysis + symbol table | |
+| A | 3. AST + recursive descent parser + D3 parse tree | done |
+| A | 4. Semantic analysis + symbol table | next |
 | A | 5. TAC + basic blocks + CFG | |
 | A | 6. Constant folding, propagation, DCE + toggles | |
 | A | 7. Codegen + stack VM + Run | |

@@ -17,10 +17,12 @@ The frontend is a real IDE, not a form: syntax-highlighted editor with a line
 gutter, project tree, build log, problems list, and a status bar — dark theme,
 no npm, no build step.
 
-> **Status:** Tier A step 3 of 7 — lexer and parser are live. Press **Build**
-> and tab 2 fills with the token stream, tab 4 with a navigable parse tree.
-> Syntax errors appear in the Problems panel; click one to jump to it.
-> Remaining phases land one per step; see [Build status](#build-status).
+> **Status:** Tier A step 3 of 7 is complete — the lexer and the recursive
+> descent parser are live. Press **Build**: tab 2 fills with the token stream
+> and tab 4 draws the abstract syntax tree top-down, every node labelled with
+> its formal AST class name and every edge with the role it fills. Syntax
+> errors appear in the Problems panel; click one to jump to it. Step 4,
+> semantic analysis, is next; see [Build status](#build-status).
 
 ## Quick start
 
