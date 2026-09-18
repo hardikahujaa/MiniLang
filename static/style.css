@@ -685,19 +685,76 @@ ul { margin: 0; padding: 0; list-style: none; }
   stroke-width: 1.4px;
 }
 
-.tree-node { cursor: pointer; }
-.tree-node circle { transition: r 0.12s ease; }
-.tree-node:hover circle { r: 6; }
-
-.tree-node text {
-  font: 11.5px var(--mono);
-  fill: var(--fg-muted);
+/* The role a child fills in its parent -- left/right, cond/then/else. Drawn on
+   the edge itself and haloed, so the curve does not read through the text. */
+.tree-edge-label {
+  font: 10px var(--mono);
+  fill: var(--fg-faint);
   paint-order: stroke;
   stroke: var(--bg-editor);
-  stroke-width: 3px;
+  stroke-width: 3.5px;
   stroke-linejoin: round;
+  pointer-events: none;
+  user-select: none;
 }
-.tree-node:hover text { fill: var(--fg); }
+
+.tree-node { cursor: pointer; }
+
+.tree-node rect {
+  fill: var(--bg-raised);
+  stroke-width: 1.3px;
+  transition: fill 0.12s ease, stroke-width 0.12s ease;
+}
+.tree-node:hover rect {
+  fill: var(--bg-hover);
+  stroke-width: 2px;
+}
+
+/* Line 1: the formal AST class name, coloured by node kind. */
+.tree-node-class {
+  font: 600 12px var(--mono);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Line 2: the datum the node holds, drawn as ( value ). */
+.tree-node-value {
+  font: 11px var(--mono);
+  fill: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* A folded node keeps its subtree; the count says how much is hidden. */
+.tree-node.is-folded rect {
+  stroke: var(--accent);
+  stroke-dasharray: 3 2;
+}
+.tree-fold-count {
+  font: 10px var(--mono);
+  fill: var(--accent);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Evaluation order, off until the toolbar toggle turns it on. Nodes that are
+   not operators carry an inline display:none, which outranks the rule below --
+   so the toggle only ever reveals the steps that actually compute something. */
+.tree-eval {
+  display: none;
+  pointer-events: none;
+}
+.tree-svg.show-eval .tree-eval { display: block; }
+.tree-eval circle {
+  fill: var(--accent-deep);
+  stroke: var(--accent);
+  stroke-width: 1px;
+}
+.tree-eval text {
+  font: 600 9.5px var(--mono);
+  fill: #ffffff;
+  user-select: none;
+}
 
 .viz-placeholder {
   color: var(--fg-faint);

@@ -126,6 +126,7 @@ function activateTab(name) {
   if (name === "lexical") renderTokenWindow();
   if (name === "syntax" && lastAst && !treeHandle) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
+    applyEvalOrder();
   }
 }
 
@@ -325,6 +326,19 @@ function explainMissingTree() {
 }
 
 /**
+ * Push the evaluation-order toggle's state onto the current tree.
+ *
+ * Every render builds a fresh SVG, so the toggle cannot be assumed to survive
+ * one: it has to be re-applied each time a tree is drawn.
+ *
+ * @returns {void}
+ */
+function applyEvalOrder() {
+  const box = $("#opt-eval-order");
+  if (treeHandle && box) treeHandle.setEvalOrder(box.checked);
+}
+
+/**
  * Render the abstract syntax tree on the Syntax tab.
  *
  * Drawing is skipped while the panel is hidden: an SVG laid out inside a
@@ -356,6 +370,7 @@ function renderAst(ast) {
 
   if ($("#panel-syntax").classList.contains("is-active")) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", ast);
+    applyEvalOrder();
   }
 }
 
@@ -704,6 +719,7 @@ function init() {
   $("#btn-tree-expand").addEventListener("click", () => treeHandle && treeHandle.expandAll());
   $("#btn-tree-collapse").addEventListener("click", () => treeHandle && treeHandle.collapseAll());
   $("#btn-tree-reset").addEventListener("click", () => treeHandle && treeHandle.resetView());
+  $("#opt-eval-order").addEventListener("change", applyEvalOrder);
   $("#language-select").addEventListener("change", (e) => setLanguage(e.target.value));
   $("#token-filter").addEventListener("input", () => renderTokens((lastResult || {}).tokens || []));
   $("#token-viewport").addEventListener("scroll", renderTokenWindow, { passive: true });
