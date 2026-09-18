@@ -449,3 +449,68 @@ class TestDarkThemeOnly:
         root = re.search(r":root\s*\{(.*?)\}", STYLE_CSS, re.DOTALL)
         assert root, ":root token block not found"
         assert root.group(1).count("--") > 30
+
+
+class TestSemanticTabContract:
+    """Tab 5 must actually be wired, not merely present in the markup."""
+
+    def test_symbol_table_markup_exists(self):
+        for element_id in (
+            "semantic-empty",
+            "symbol-stats",
+            "symbol-filter",
+            "symbol-table-wrap",
+            "symbol-viewport",
+            "symbol-spacer",
+            "symbol-rows",
+        ):
+            assert f'id="{element_id}"' in INDEX_HTML, f"missing #{element_id}"
+
+    def test_the_placeholder_is_gone(self):
+        """Tab 5 advertised step 4 as unbuilt; it is built."""
+        assert "Scoped symbol table and type diagnostics render here." not in INDEX_HTML
+
+    def test_controller_renders_the_symbol_table(self):
+        assert "function renderSymbols(" in APP_JS
+        assert "renderSymbols(result.symbols || [])" in APP_JS
+
+    def test_table_is_redrawn_when_its_tab_becomes_visible(self):
+        """A table measured inside display:none has zero height and draws nothing."""
+        assert 'name === "semantic"' in APP_JS
+
+    def test_every_required_column_is_rendered(self):
+        """The tab exists to prove scope tracking, so scope and depth must show."""
+        for column in ("Name", "Type", "Kind", "Scope", "Depth", "Line", "Col"):
+            assert f">{column}<" in INDEX_HTML, f"column {column} missing from the header"
+        for css_class in ("sym-c-name", "sym-c-type", "sym-c-kind", "sym-c-scope", "sym-c-depth"):
+            assert css_class in APP_JS, f"{css_class} never rendered"
+            assert f".{css_class}" in STYLE_CSS, f"{css_class} has no style"
+
+    def test_depth_is_labelled_the_way_a_textbook_labels_it(self):
+        assert "function depthLabel(" in APP_JS
+        assert '"Global"' in APP_JS
+        assert "Local-" in APP_JS
+
+    def test_symbol_rows_reuse_the_virtual_table_machinery(self):
+        """Windowing is shared with tab 2 rather than reimplemented."""
+        assert "renderSymbolWindow" in APP_JS
+        assert "ROW_OVERSCAN" in APP_JS
+        assert ".sym-table .vt-row" in STYLE_CSS
+
+    def test_type_errors_reach_the_problems_panel(self):
+        """Already wired before this step; pinned so it cannot silently regress."""
+        assert "renderProblems(result.errors, result.typeErrors)" in APP_JS
+        assert "editor.goTo(Number(row.dataset.line), Number(row.dataset.col))" in APP_JS
+
+    def test_inferred_types_are_drawn_on_the_ast(self):
+        viz = SCRIPT_SOURCES["viz.js"]
+        assert "inferredType" in viz
+        assert "tree-node-type" in viz
+        assert ".tree-node-type" in STYLE_CSS
+
+    def test_no_source_file_contains_a_null_byte(self):
+        """A stray NUL makes a file read as binary to every diff and grep tool."""
+        for name, source in SCRIPT_SOURCES.items():
+            assert "\x00" not in source, f"{name} contains a NUL byte"
+        assert "\x00" not in INDEX_HTML
+        assert "\x00" not in STYLE_CSS

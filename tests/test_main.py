@@ -271,7 +271,7 @@ class TestSyntaxAnalysis:
         assert body["ast"] is not None
         assert body["ast"]["node"] == "Program"
         assert body["ast"]["functionCount"] == 2
-        assert body["meta"]["reachedPhase"] == "parser"
+        assert body["meta"]["reachedPhase"] == "semantic"
 
     def test_ast_is_shaped_for_the_tree_renderer(self, client: TestClient, demo_source: str):
         """D3's hierarchy layout reads `children`; the box reads `node` and `detail`."""
@@ -346,8 +346,12 @@ class TestSyntaxAnalysis:
         assert "lexer" in phases
         assert "parser" in phases
 
-    def test_health_reports_both_phases(self, client: TestClient):
-        assert client.get("/api/health").json()["phasesImplemented"] == ["lexer", "parser"]
+    def test_health_reports_every_wired_phase(self, client: TestClient):
+        assert client.get("/api/health").json()["phasesImplemented"] == [
+            "lexer",
+            "parser",
+            "semantic",
+        ]
 
 
 class TestAssetFingerprinting:
@@ -410,3 +414,78 @@ class TestOpenApi:
         spec = json.loads(response.text)
         for path in ("/compile", "/run", "/analyze-grammar", "/api/health", "/api/demo"):
             assert path in spec["paths"], f"route missing from OpenAPI: {path}"
+
+
+class TestSemanticAnalysis:
+    """Phase 3 as seen through the API."""
+
+    def test_demo_program_is_semantically_clean(self, client: TestClient, demo_source: str):
+        """The shipped demo must never open with errors on the Problems panel."""
+        body = client.post("/compile", json={"source": demo_source}).json()
+        assert body["typeErrors"] == []
+        assert body["meta"]["ok"] is True
+        assert body["meta"]["reachedPhase"] == "semantic"
+
+    def test_symbol_table_is_returned(self, client: TestClient, demo_source: str):
+        body = client.post("/compile", json={"source": demo_source}).json()
+        symbols = body["symbols"]
+        assert symbols, "the demo declares functions and variables"
+
+        by_name = {s["name"]: s for s in symbols}
+        assert by_name["fib"]["kind"] == "function"
+        assert by_name["fib"]["type"] == "(int) -> int"
+        assert by_name["fib"]["depth"] == 0
+        assert by_name["n"]["kind"] == "parameter"
+        assert by_name["t"]["depth"] == 2, "declared inside the while body"
+
+    def test_semantic_timing_is_recorded(self, client: TestClient, demo_source: str):
+        body = client.post("/compile", json={"source": demo_source}).json()
+        phases = [t["phase"] for t in body["meta"]["timings"]]
+        assert phases == ["lexer", "parser", "semantic", "total"]
+
+    def test_type_errors_are_reported_with_positions(self, client: TestClient):
+        body = client.post("/compile", json={"source": "func m(): void { int x = 1.5; }"}).json()
+        assert len(body["typeErrors"]) == 1
+
+        diagnostic = body["typeErrors"][0]
+        assert diagnostic["severity"] == "error"
+        assert diagnostic["phase"] == "semantic"
+        assert diagnostic["line"] == 1
+        assert diagnostic["col"] >= 1
+        assert body["meta"]["ok"] is False
+
+    def test_a_type_error_still_returns_the_tree_and_the_symbols(self, client: TestClient):
+        """A wrong type is not a parse failure; the artefacts must survive it."""
+        body = client.post("/compile", json={"source": "func m(): void { int x = 1.5; }"}).json()
+        assert body["ast"] is not None
+        assert body["symbols"]
+
+    def test_ast_carries_the_inferred_types(self, client: TestClient):
+        """The tree is serialised after annotation, not before."""
+        source = "func m(): void { float f = 1; bool b = f < 2.0; }"
+        ast = client.post("/compile", json={"source": source}).json()["ast"]
+
+        typed = {}
+        stack = [ast]
+        while stack:
+            node = stack.pop()
+            if node.get("inferredType"):
+                typed[node["name"]] = node["inferredType"]
+            stack.extend(node["children"])
+
+        assert typed, "no expression was annotated"
+        assert typed["BinaryOp (<)"] == "bool"
+        assert typed["Identifier (f)"] == "float"
+
+    def test_a_syntax_error_skips_phase_three_without_crashing(self, client: TestClient):
+        """`program` is unbound on the parse-error path; the guard must hold."""
+        body = client.post("/compile", json={"source": "func m(): void { int x = 5 }"}).json()
+        assert body["symbols"] == []
+        assert body["typeErrors"] == []
+        assert body["meta"]["reachedPhase"] == "lexer"
+
+    def test_warnings_do_not_make_a_program_fail(self, client: TestClient):
+        source = "func f(int n): int { if (n > 0) { return 1; } }"
+        body = client.post("/compile", json={"source": source}).json()
+        assert [d["severity"] for d in body["typeErrors"]] == ["warning"]
+        assert body["meta"]["ok"] is True
