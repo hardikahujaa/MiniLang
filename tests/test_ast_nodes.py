@@ -9,6 +9,7 @@ cannot draw, breaks a downstream phase rather than failing locally.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -84,6 +85,19 @@ NODE_FACTORIES = {
     ),
     "Program": lambda: Program(functions=[], line=1, column=1),
 }
+
+
+def _roles(payload: dict) -> list[str]:
+    """Return the branch label of each child, in source order.
+
+    Args:
+        payload: A serialised node.
+
+    Returns:
+        Every child's ``edge`` -- the role it fills in its parent, which is what
+        names the branch in the drawn tree.
+    """
+    return [child["edge"] for child in payload["children"]]
 
 
 class TestBaseClasses:
@@ -175,11 +189,12 @@ class TestSerialisationEnvelope:
 class TestOptionalChildren:
     """A missing optional child must not leave a null in the children list."""
 
-    def test_vardecl_without_initialiser_has_no_children(self):
+    def test_vardecl_without_initialiser_still_has_type_and_name(self):
+        """`int x;` is three facts, not one: a type, a name, and no value."""
         node = VarDecl(var_type="int", name="x", initializer=None, line=1, column=1)
-        assert node.to_dict()["children"] == []
+        assert _roles(node.to_dict()) == ["type", "name"]
 
-    def test_vardecl_with_initialiser_has_one_child(self):
+    def test_vardecl_with_initialiser_adds_an_init_branch(self):
         node = VarDecl(
             var_type="int",
             name="x",
@@ -187,7 +202,7 @@ class TestOptionalChildren:
             line=1,
             column=1,
         )
-        assert len(node.to_dict()["children"]) == 1
+        assert _roles(node.to_dict()) == ["type", "name", "init"]
 
     def test_return_without_value(self):
         payload = ReturnStmt(value=None, line=1, column=1).to_dict()
@@ -197,7 +212,7 @@ class TestOptionalChildren:
     def test_if_without_else_has_two_children(self):
         node = NODE_FACTORIES["IfStmt"]()
         payload = node.to_dict()
-        assert len(payload["children"]) == 2
+        assert _roles(payload) == ["cond", "then"]
         assert payload["hasElse"] is False
 
     def test_if_with_else_has_three_children(self):
@@ -209,7 +224,7 @@ class TestOptionalChildren:
             column=1,
         )
         payload = node.to_dict()
-        assert len(payload["children"]) == 3
+        assert _roles(payload) == ["cond", "then", "else"]
         assert payload["hasElse"] is True
 
     def test_no_child_is_ever_null(self):
@@ -225,7 +240,8 @@ class TestNodeSpecificFields:
         """'007' must render as written, not as the integer 7."""
         node = Literal(value=7, literal_type="int", raw="007", line=1, column=1)
         payload = node.to_dict()
-        assert payload["name"] == "007"
+        assert payload["name"] == "Literal (007)"
+        assert payload["detail"] == "007"
         assert payload["value"] == 7
 
     @pytest.mark.parametrize(
@@ -237,11 +253,32 @@ class TestNodeSpecificFields:
         assert node.to_dict()["literalType"] == type_name
 
     def test_binary_op_labels_with_its_operator(self):
-        assert NODE_FACTORIES["BinaryOp"]().to_dict()["name"] == "+"
+        payload = NODE_FACTORIES["BinaryOp"]().to_dict()
+        assert payload["name"] == "BinaryOp (+)"
+        assert payload["detail"] == "+"
+
+    def test_binary_operands_are_labelled_left_and_right(self):
+        """`a - b` and `b - a` share a node set and differ only by these roles."""
+        assert _roles(NODE_FACTORIES["BinaryOp"]().to_dict()) == ["left", "right"]
 
     def test_unary_op_is_distinguishable_from_binary(self):
         """'-' as prefix and '-' as subtraction must not look identical."""
-        assert NODE_FACTORIES["UnaryOp"]().to_dict()["name"] == "unary -"
+        unary = UnaryOp(
+            operator="-", operand=Identifier(name="a", line=1, column=2), line=1, column=1
+        ).to_dict()
+        binary = BinaryOp(
+            operator="-",
+            left=Identifier(name="a", line=1, column=1),
+            right=Identifier(name="b", line=1, column=5),
+            line=1,
+            column=3,
+        ).to_dict()
+
+        # Same operator spelling; the class name is what tells them apart.
+        assert unary["detail"] == binary["detail"] == "-"
+        assert unary["name"] == "UnaryOp (-)"
+        assert binary["name"] == "BinaryOp (-)"
+        assert _roles(unary) == ["operand"]
 
     def test_call_records_arity(self):
         node = CallExpr(
@@ -253,9 +290,14 @@ class TestNodeSpecificFields:
         payload = node.to_dict()
         assert payload["callee"] == "fib"
         assert payload["argumentCount"] == 1
-        assert len(payload["children"]) == 1
+        assert _roles(payload) == ["callee", "args"]
 
-    def test_funcdecl_label_shows_the_signature(self):
+        callee, args = payload["children"]
+        assert (callee["node"], callee["detail"]) == ("Identifier", "fib")
+        assert args["node"] == "ArgList"
+        assert _roles(args) == ["arg 0"]
+
+    def test_funcdecl_expands_into_four_named_branches(self):
         node = FuncDecl(
             name="add",
             params=[
@@ -268,10 +310,21 @@ class TestNodeSpecificFields:
             column=1,
         )
         payload = node.to_dict()
-        assert payload["name"] == "func add(int a, int b): int"
+        assert payload["name"] == "FuncDecl (add)"
         assert payload["arity"] == 2
-        # Two params plus the body.
-        assert len(payload["children"]) == 3
+        assert _roles(payload) == ["name", "params", "returns", "body"]
+
+        # The flattened signature survives as tooltip data only -- never as the
+        # drawn label, which is the whole point of this shape.
+        assert payload["signature"] == "func add(int a, int b): int"
+
+        name, params, returns, body = payload["children"]
+        assert (name["node"], name["detail"]) == ("Identifier", "add")
+        assert params["node"] == "ParamList"
+        assert _roles(params) == ["param 0", "param 1"]
+        assert _roles(params["children"][0]) == ["type", "name"]
+        assert (returns["node"], returns["detail"]) == ("Type", "int")
+        assert body["node"] == "Block"
 
     def test_program_counts_its_functions(self):
         program = Program(
@@ -356,6 +409,167 @@ class TestNestedTrees:
             column=1,
         )
         restored = json.loads(json.dumps(program.to_dict()))
-        var_decl = restored["children"][0]["children"][0]["children"][0]
+        func = restored["children"][0]
+        body = func["children"][_roles(func).index("body")]
+        var_decl = body["children"][0]
         assert var_decl["node"] == "VarDecl"
-        assert var_decl["children"][0]["name"] == "*"
+
+        init = var_decl["children"][_roles(var_decl).index("init")]
+        assert init["name"] == "BinaryOp (*)"
+
+
+def _walk(payload: dict) -> list[dict]:
+    """Collect every node in a serialised tree.
+
+    Args:
+        payload: The serialised root.
+
+    Returns:
+        Every node in the subtree, root included, in no particular order.
+    """
+    found: list[dict] = []
+    stack = [payload]
+    while stack:
+        node = stack.pop()
+        found.append(node)
+        stack.extend(node["children"])
+    return found
+
+
+class TestNoFlattening:
+    """Structure must be nodes and edges, never text packed into a label.
+
+    This is the contract the Syntax tab is graded on. A label like
+    ``func fib(int n): int`` hides four distinct syntactic children behind one
+    caption, which is exactly what an abstract syntax tree is supposed to make
+    visible, so it is pinned here rather than left to review.
+    """
+
+    #: A legal label: a class name, then at most one parenthesised datum.
+    LABEL = re.compile(r"^[A-Za-z]\w*(?: \(.*\))?$")
+
+    @pytest.mark.parametrize("name", sorted(NODE_FACTORIES))
+    def test_label_is_a_class_name_plus_at_most_one_datum(self, name: str):
+        payload = NODE_FACTORIES[name]().to_dict()
+        assert self.LABEL.match(payload["name"]), payload["name"]
+        assert payload["name"].split(" (")[0] == payload["node"]
+
+    @pytest.mark.parametrize("name", sorted(NODE_FACTORIES))
+    def test_every_child_declares_the_role_it_fills(self, name: str):
+        """An unlabelled edge makes the drawing ambiguous."""
+        for child in NODE_FACTORIES[name]().to_dict()["children"]:
+            assert child["edge"], f"{name} -> {child['node']} has no edge role"
+
+    def test_the_root_fills_no_role(self):
+        assert NODE_FACTORIES["Program"]().to_dict()["edge"] is None
+
+    def test_no_label_in_a_real_program_is_flattened(self):
+        """The regression this whole shape exists to prevent."""
+        from app.lexer import tokenize
+        from app.parser import parse
+
+        source = "func fib(int n): int { int a = 1 + n * 2; return fib(a); }"
+        labels = [node["name"] for node in _walk(parse(tokenize(source).tokens).to_dict())]
+
+        assert labels, "the walk found nothing to check"
+        for label in labels:
+            assert self.LABEL.match(label), f"flattened label: {label!r}"
+        assert not any(label.startswith("func ") for label in labels)
+
+    def test_names_and_types_become_nodes_of_their_own(self):
+        """Identifiers and type annotations are structure, not decoration."""
+        from app.lexer import tokenize
+        from app.parser import parse
+
+        source = "func m(int n): void { int x = 1; x = n; print(g(x, n)); }"
+        classes = {node["node"] for node in _walk(parse(tokenize(source).tokens).to_dict())}
+
+        assert {"Identifier", "Type", "ParamList", "ArgList"} <= classes
+
+    def test_precedence_reads_as_depth(self):
+        """`1 + n * 2` must put the tighter-binding operator underneath."""
+        from app.lexer import tokenize
+        from app.parser import parse
+
+        payload = parse(tokenize("func m(): void { int a = 1 + n * 2; }").tokens).to_dict()
+        func = payload["children"][0]
+        body = func["children"][_roles(func).index("body")]
+        var_decl = body["children"][0]
+        init = var_decl["children"][_roles(var_decl).index("init")]
+
+        assert init["name"] == "BinaryOp (+)"
+        right = init["children"][_roles(init).index("right")]
+        assert right["name"] == "BinaryOp (*)", "multiplication must sit below addition"
+
+
+class TestPositionIntegrity:
+    """Every drawn node must point at the source text it actually stands for.
+
+    A declaration stores its name as a ``str``, so the ``Identifier`` node the
+    tree draws has no position of its own -- it has to be recorded by the
+    parser. Inheriting the owning statement's position instead looks harmless
+    and is not: the semantic analyser reports undeclared variables and type
+    errors against these nodes, and the editor jumps to the position they
+    carry. Pointing at the start of the statement sends the cursor to the type
+    keyword rather than the offending name.
+    """
+
+    SOURCE = (
+        "func total(int count, bool flag): int {\n"
+        "    int sum = count + 1;\n"
+        "    bool seen = flag;\n"
+        "    sum = sum * 2;\n"
+        "    return sum;\n"
+        "}"
+    )
+
+    def _tree(self) -> dict:
+        from app.lexer import tokenize
+        from app.parser import parse
+
+        return parse(tokenize(self.SOURCE).tokens).to_dict()
+
+    def test_every_leaf_points_at_its_own_text(self):
+        lines = self.SOURCE.splitlines()
+        checked = 0
+        for node in _walk(self._tree()):
+            detail = node.get("detail")
+            if node["node"] not in ("Identifier", "Type", "Literal"):
+                continue
+            if not isinstance(detail, str):
+                continue
+            checked += 1
+            text = lines[node["line"] - 1]
+            found = text[node["column"] - 1 : node["column"] - 1 + len(detail)]
+            assert found == detail, (
+                f"{node['node']} ({detail}) claims "
+                f"{node['line']}:{node['column']}, which holds {found!r}"
+            )
+        assert checked >= 12, "the walk did not reach the interesting nodes"
+
+    def test_declared_name_does_not_inherit_the_statement_position(self):
+        """`int sum = ...` -- the name is at column 9, the statement at 5."""
+        tree = self._tree()
+        decls = [n for n in _walk(tree) if n["node"] == "VarDecl" and n["identifier"] == "sum"]
+        assert len(decls) == 1
+
+        decl = decls[0]
+        roles = {child["edge"]: child for child in decl["children"]}
+        assert (decl["line"], decl["column"]) == (2, 5)
+        assert (roles["type"]["line"], roles["type"]["column"]) == (2, 5)
+        assert (roles["name"]["line"], roles["name"]["column"]) == (2, 9)
+
+    def test_function_name_and_return_type_carry_their_own_positions(self):
+        """FuncDecl sits on `func`; its name and return type do not."""
+        func = self._tree()["children"][0]
+        roles = {child["edge"]: child for child in func["children"]}
+        assert (func["line"], func["column"]) == (1, 1)
+        assert (roles["name"]["line"], roles["name"]["column"]) == (1, 6)
+        assert roles["returns"]["column"] > func["column"]
+
+    def test_parameter_names_carry_their_own_positions(self):
+        func = self._tree()["children"][0]
+        params = {c["edge"]: c for c in func["children"]}["params"]
+        for param in params["children"]:
+            roles = {child["edge"]: child for child in param["children"]}
+            assert roles["name"]["column"] > roles["type"]["column"]

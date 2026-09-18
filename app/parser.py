@@ -405,6 +405,7 @@ class Parser:
 
         self._expect(TokenType.RPAREN, "function parameter list")
         self._expect(TokenType.COLON, "function return type")
+        return_type_token = self._peek()
         return_type = self._type("function return type")
         body = self._block()
 
@@ -415,6 +416,8 @@ class Parser:
             body=body,
             line=keyword.line,
             column=keyword.col,
+            name_pos=(name.line, name.col),
+            return_type_pos=(return_type_token.line, return_type_token.col),
         )
 
     def _params(self) -> list[Param]:
@@ -449,6 +452,7 @@ class Parser:
             name=name.lexeme,
             line=start.line,
             column=start.col,
+            name_pos=(name.line, name.col),
         )
 
     def _type(self, context: str) -> str:
@@ -543,6 +547,7 @@ class Parser:
             initializer=initializer,
             line=start.line,
             column=start.col,
+            name_pos=(name.line, name.col),
         )
 
     def _assign_stmt(self) -> AssignStmt:

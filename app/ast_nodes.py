@@ -13,11 +13,24 @@ readable: ``BinaryOp("+", left, right, line=3, column=11)`` rather than
 ``BinaryOp(3, 11, "+", left, right)``.
 
 **Every node serialises itself.** :meth:`ASTNode.to_dict` is abstract, so a new
-node type cannot be added without deciding how it is rendered. The dictionaries
-it produces are directly consumable by D3's hierarchy layout -- each carries a
-``name`` to draw and a ``children`` list to recurse into -- while also keeping
-the node's own fields, so one serialisation serves both the AST view and the
-tree view.
+node type cannot be added without deciding how it is rendered.
+
+**Serialisation is a textbook projection, not a mirror of the dataclass.**
+This is the important decision in this module. In memory, ``FuncDecl.name`` is
+a ``str`` -- that is the right representation for a compiler, and every later
+phase wants it that way. But a *drawn* abstract syntax tree must not collapse a
+construct into a caption: an examiner looking at ``func fib(int n): int`` in a
+single box cannot see that the identifier, the parameter list, the return type
+and the body are four distinct syntactic children. So :meth:`to_dict` expands
+those strings into real child nodes -- ``Identifier``, ``Type``, ``ParamList``,
+``ArgList`` -- that exist only in the serialised form. The parser stays simple,
+the semantic analyser stays simple, and the JSON is strictly textbook.
+
+**Every child knows its role.** Children are declared as ``(role, node)`` slots
+and each child is stamped with an ``edge`` naming the role it fills in its
+parent: ``left``/``right`` on a :class:`BinaryOp`, ``cond``/``then``/``else`` on
+an :class:`IfStmt`. Without this an AST drawing is ambiguous -- ``a - b`` and
+``b - a`` have identical node sets and differ only by which operand is which.
 
 **Nodes are mutable.** Not frozen dataclasses: the semantic analyser annotates
 expressions with their resolved type in place (see :attr:`Expr.inferred_type`),
@@ -26,13 +39,198 @@ which is what lets the Semantic tab show types on the tree.
 **Grouping parentheses produce no node.** ``(a + b) * c`` and the precedence of
 ``*`` over ``+`` are both expressed by the tree's *shape*; a ``Grouping`` node
 would be redundant structure that every later phase would have to skip over.
+Precedence is visible as depth: the more tightly an operator binds, the deeper
+it sits, and the deepest subexpression is the one evaluated first.
+
+The serialised envelope
+-----------------------
+Every node, real or synthetic, is a dictionary with these keys::
+
+    node     the formal AST class name  -- "BinaryOp"     (drawn, line 1)
+    detail   the datum the node holds   -- "*" or None    (drawn, line 2)
+    name     node and detail together   -- "BinaryOp (*)" (convenience/tooltip)
+    kind     broad category for styling -- "binary"
+    edge     role filled in the parent  -- "left", or None at the root
+    line     1-based source line
+    column   1-based source column
+    children child nodes, in source order
+
+plus whatever node-specific fields the node adds (``operator``, ``literalType``,
+``arity``, ...). ``detail`` is deliberately separate from a node's own ``value``
+field: :class:`Literal` keeps ``value`` as the *Python* value for constant
+folding, while ``detail`` carries the source spelling that gets drawn.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+#: One child slot: the role the child fills in its parent, and the child. The
+#: child may be a live node, an already-serialised synthetic node, or ``None``
+#: for an absent optional child such as a missing ``else``.
+ChildSlot = tuple[str, "ASTNode | dict[str, Any] | None"]
+
+#: A source position: 1-based line, 1-based column.
+Position = tuple[int, int]
+
+
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+
+
+def _at(position: Position | None, line: int, column: int) -> Position:
+    """Resolve a synthetic child's own position.
+
+    A declaration stores its name as a ``str``, so the ``Identifier`` node the
+    tree draws has no position of its own unless the parser recorded one. When
+    it did, that is the position to report -- a diagnostic on an undeclared
+    variable must point at the variable, not at the start of the statement that
+    declares it. When it did not, falling back to the owner keeps every node
+    positioned rather than emitting a null.
+
+    Args:
+        position: The recorded position, or ``None``.
+        line: The owning construct's line, used as the fallback.
+        column: The owning construct's column, used as the fallback.
+
+    Returns:
+        The position to attach to the synthetic node.
+    """
+    return position if position is not None else (line, column)
+
+
+def _label(node: str, detail: Any) -> str:
+    """Compose the one-line label for a node.
+
+    Args:
+        node: The formal AST class name.
+        detail: The datum the node holds, or ``None`` if it holds none.
+
+    Returns:
+        ``"Identifier (x)"`` when there is a datum, ``"Block"`` when there is
+        not. Never a flattened rendering of the node's children.
+    """
+    return f"{node} ({detail})" if detail is not None else node
+
+
+def _resolve(children: Sequence[ChildSlot] | None) -> list[dict[str, Any]]:
+    """Serialise child slots, stamping each child with the role it fills.
+
+    Args:
+        children: Child slots in source order. Slots whose node is ``None`` are
+            dropped, which lets callers pass optional children directly.
+
+    Returns:
+        The serialised children, each carrying its ``edge``.
+    """
+    resolved: list[dict[str, Any]] = []
+    for role, child in children or []:
+        if child is None:
+            continue
+        payload = child.to_dict() if isinstance(child, ASTNode) else child
+        payload["edge"] = role
+        resolved.append(payload)
+    return resolved
+
+
+def _synthetic(
+    node: str,
+    kind: str,
+    *,
+    line: int,
+    column: int,
+    detail: Any = None,
+    children: Sequence[ChildSlot] | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Build a serialised node that has no dataclass behind it.
+
+    Used for the structural nodes that exist only in the drawn tree --
+    ``Identifier`` at a declaration site, ``Type``, ``ParamList``, ``ArgList``.
+    They take their position from the construct that owns them, so every node
+    in the output still answers "where in the source did this come from?".
+
+    Args:
+        node: The formal AST class name to draw.
+        kind: Broad category used for styling.
+        line: 1-based source line.
+        column: 1-based source column.
+        detail: The datum this node holds, if any.
+        children: Child slots, in source order.
+        **fields: Extra node-specific fields to include.
+
+    Returns:
+        The node's dictionary representation.
+    """
+    payload: dict[str, Any] = {
+        "node": node,
+        "detail": detail,
+        "name": _label(node, detail),
+        "kind": kind,
+        "edge": None,
+    }
+    # No node-specific field shares a name with an envelope key, so this cannot
+    # clobber the label. Position and children are written afterwards so that a
+    # stray field can never displace them either.
+    payload.update(fields)
+    payload["line"] = line
+    payload["column"] = column
+    payload["children"] = _resolve(children)
+    return payload
+
+
+def _identifier_node(name: str, *, line: int, column: int) -> dict[str, Any]:
+    """Build the ``Identifier`` node for a name that is stored as a string.
+
+    A declaration's name, an assignment's target and a call's callee are all
+    plain ``str`` on their dataclass. In a drawn tree each is a node.
+
+    Args:
+        name: The identifier's spelling.
+        line: 1-based source line of the owning construct.
+        column: 1-based source column of the owning construct.
+
+    Returns:
+        A serialised ``Identifier`` node.
+    """
+    return _synthetic(
+        "Identifier", "identifier", line=line, column=column, detail=name, identifier=name
+    )
+
+
+def _type_node(type_name: str, *, line: int, column: int) -> dict[str, Any]:
+    """Build the ``Type`` node for a declared type annotation.
+
+    Args:
+        type_name: The type's spelling, e.g. ``"int"``.
+        line: 1-based source line of the owning construct.
+        column: 1-based source column of the owning construct.
+
+    Returns:
+        A serialised ``Type`` node.
+    """
+    return _synthetic(
+        "Type", "type", line=line, column=column, detail=type_name, typeName=type_name
+    )
+
+
+def _indexed(role: str, nodes: Sequence[Any]) -> list[ChildSlot]:
+    """Number a homogeneous run of children so each edge is distinct.
+
+    Args:
+        role: Singular role name, e.g. ``"stmt"``.
+        nodes: The children, in source order.
+
+    Returns:
+        Slots labelled ``stmt 0``, ``stmt 1``, ... so that sibling order is
+        readable off the drawing rather than inferred from position.
+    """
+    return [(f"{role} {index}", node) for index, node in enumerate(nodes)]
+
 
 # ---------------------------------------------------------------------------
 # Base classes
@@ -55,9 +253,7 @@ class ASTNode(ABC):
     def to_dict(self) -> dict[str, Any]:
         """Serialise this node, and everything under it, to plain data.
 
-        The result is JSON-encodable and directly renderable by D3: it always
-        carries ``name`` (the label to draw) and ``children`` (the nodes to
-        recurse into), alongside the node's own fields.
+        The result is JSON-encodable and directly renderable by D3.
 
         Returns:
             A dictionary describing this subtree.
@@ -66,36 +262,36 @@ class ASTNode(ABC):
 
     def _node_dict(
         self,
-        name: str,
         kind: str,
-        children: list[ASTNode | None] | None = None,
+        *,
+        detail: Any = None,
+        children: Sequence[ChildSlot] | None = None,
         **fields: Any,
     ) -> dict[str, Any]:
         """Build the common part of a node's serialised form.
 
         Centralised so that every node emits the same envelope and a new node
-        type cannot accidentally omit its position or its children key.
+        type cannot accidentally omit its position, its children key, or the
+        role labels on its edges.
 
         Args:
-            name: Label drawn on the node in the tree view.
             kind: Broad category used for styling, e.g. ``"expr"``.
-            children: Child nodes, in source order. ``None`` entries are
-                dropped, which lets callers pass optional children directly.
+            detail: The datum this node holds, if any.
+            children: Child slots, in source order.
             **fields: Extra node-specific fields to include.
 
         Returns:
             The node's dictionary representation.
         """
-        payload: dict[str, Any] = {
-            "node": type(self).__name__,
-            "name": name,
-            "kind": kind,
-            "line": self.line,
-            "column": self.column,
-        }
-        payload.update(fields)
-        payload["children"] = [child.to_dict() for child in (children or []) if child is not None]
-        return payload
+        return _synthetic(
+            type(self).__name__,
+            kind,
+            line=self.line,
+            column=self.column,
+            detail=detail,
+            children=children,
+            **fields,
+        )
 
 
 @dataclass
@@ -159,13 +355,17 @@ class Literal(Expr):
     def to_dict(self) -> dict[str, Any]:
         """Serialise this literal.
 
+        ``detail`` shows the source spelling; ``value`` keeps the Python value
+        that constant folding will read.
+
         Returns:
             A dictionary describing this node.
         """
         return self._node_dict(
-            name=self.raw,
-            kind="literal",
+            "literal",
+            detail=self.raw,
             value=self.value,
+            raw=self.raw,
             literalType=self.literal_type,
             inferredType=self.inferred_type,
         )
@@ -188,8 +388,8 @@ class Identifier(Expr):
             A dictionary describing this node.
         """
         return self._node_dict(
-            name=self.name,
-            kind="identifier",
+            "identifier",
+            detail=self.name,
             identifier=self.name,
             inferredType=self.inferred_type,
         )
@@ -201,7 +401,9 @@ class BinaryOp(Expr):
 
     Precedence and associativity are not stored: they are already expressed by
     where this node sits in the tree, which is what the recursive descent chain
-    in :mod:`app.parser` establishes.
+    in :mod:`app.parser` establishes. The two operands are serialised under
+    explicit ``left`` and ``right`` edges, because an unlabelled drawing of
+    ``a - b`` is indistinguishable from one of ``b - a``.
 
     Attributes:
         operator: The operator's source spelling, e.g. ``"+"`` or ``"&&"``.
@@ -220,9 +422,9 @@ class BinaryOp(Expr):
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name=self.operator,
-            kind="binary",
-            children=[self.left, self.right],
+            "binary",
+            detail=self.operator,
+            children=[("left", self.left), ("right", self.right)],
             operator=self.operator,
             inferredType=self.inferred_type,
         )
@@ -243,13 +445,16 @@ class UnaryOp(Expr):
     def to_dict(self) -> dict[str, Any]:
         """Serialise this unary operation and its operand.
 
+        The class name alone distinguishes this from subtraction, so the label
+        no longer needs the old ``"unary -"`` prefix.
+
         Returns:
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name=f"unary {self.operator}",
-            kind="unary",
-            children=[self.operand],
+            "unary",
+            detail=self.operator,
+            children=[("operand", self.operand)],
             operator=self.operator,
             inferredType=self.inferred_type,
         )
@@ -269,15 +474,30 @@ class CallExpr(Expr):
     arguments: list[Expr]
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise this call and its arguments.
+        """Serialise this call, its callee and its argument list.
+
+        The callee becomes an ``Identifier`` node and the arguments are grouped
+        under an ``ArgList``, so a call with no arguments still shows the empty
+        list it has rather than looking like a leaf.
 
         Returns:
             A dictionary describing this subtree.
         """
+        arg_list = _synthetic(
+            "ArgList",
+            "list",
+            line=self.line,
+            column=self.column,
+            children=_indexed("arg", self.arguments),
+            argumentCount=len(self.arguments),
+        )
         return self._node_dict(
-            name=f"call {self.callee}",
-            kind="call",
-            children=list(self.arguments),
+            "call",
+            detail=self.callee,
+            children=[
+                ("callee", _identifier_node(self.callee, line=self.line, column=self.column)),
+                ("args", arg_list),
+            ],
             callee=self.callee,
             argumentCount=len(self.arguments),
             inferredType=self.inferred_type,
@@ -306,9 +526,8 @@ class Block(Stmt):
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name="block",
-            kind="block",
-            children=list(self.statements),
+            "block",
+            children=_indexed("stmt", self.statements),
             statementCount=len(self.statements),
         )
 
@@ -327,17 +546,25 @@ class VarDecl(Stmt):
     var_type: str
     name: str
     initializer: Expr | None
+    name_pos: Position | None = field(default=None, kw_only=True)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise this declaration and its initialiser, if any.
+        """Serialise this declaration: type, name and initialiser as children.
+
+        The node's own position is the type keyword, so the ``Type`` child
+        shares it; the name sits further along the line and carries its own.
 
         Returns:
             A dictionary describing this subtree.
         """
+        name_line, name_column = _at(self.name_pos, self.line, self.column)
         return self._node_dict(
-            name=f"{self.var_type} {self.name}",
-            kind="declaration",
-            children=[self.initializer],
+            "declaration",
+            children=[
+                ("type", _type_node(self.var_type, line=self.line, column=self.column)),
+                ("name", _identifier_node(self.name, line=name_line, column=name_column)),
+                ("init", self.initializer),
+            ],
             varType=self.var_type,
             identifier=self.name,
         )
@@ -356,15 +583,17 @@ class AssignStmt(Stmt):
     value: Expr
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise this assignment.
+        """Serialise this assignment, with the target as an ``Identifier``.
 
         Returns:
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name=f"{self.target} =",
-            kind="assign",
-            children=[self.value],
+            "assign",
+            children=[
+                ("target", _identifier_node(self.target, line=self.line, column=self.column)),
+                ("value", self.value),
+            ],
             target=self.target,
         )
 
@@ -390,9 +619,12 @@ class IfStmt(Stmt):
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name="if",
-            kind="control",
-            children=[self.condition, self.then_branch, self.else_branch],
+            "control",
+            children=[
+                ("cond", self.condition),
+                ("then", self.then_branch),
+                ("else", self.else_branch),
+            ],
             hasElse=self.else_branch is not None,
         )
 
@@ -416,9 +648,8 @@ class WhileStmt(Stmt):
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name="while",
-            kind="control",
-            children=[self.condition, self.body],
+            "control",
+            children=[("cond", self.condition), ("body", self.body)],
         )
 
 
@@ -439,9 +670,8 @@ class ReturnStmt(Stmt):
             A dictionary describing this subtree.
         """
         return self._node_dict(
-            name="return",
-            kind="control",
-            children=[self.value],
+            "control",
+            children=[("value", self.value)],
             hasValue=self.value is not None,
         )
 
@@ -462,7 +692,7 @@ class PrintStmt(Stmt):
         Returns:
             A dictionary describing this subtree.
         """
-        return self._node_dict(name="print", kind="io", children=[self.value])
+        return self._node_dict("io", children=[("value", self.value)])
 
 
 @dataclass
@@ -481,7 +711,7 @@ class ExprStmt(Stmt):
         Returns:
             A dictionary describing this subtree.
         """
-        return self._node_dict(name="expr stmt", kind="statement", children=[self.expression])
+        return self._node_dict("statement", children=[("expr", self.expression)])
 
 
 # ---------------------------------------------------------------------------
@@ -500,16 +730,21 @@ class Param(ASTNode):
 
     param_type: str
     name: str
+    name_pos: Position | None = field(default=None, kw_only=True)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise this parameter.
+        """Serialise this parameter as a type child and a name child.
 
         Returns:
-            A dictionary describing this node.
+            A dictionary describing this subtree.
         """
+        name_line, name_column = _at(self.name_pos, self.line, self.column)
         return self._node_dict(
-            name=f"{self.param_type} {self.name}",
-            kind="param",
+            "param",
+            children=[
+                ("type", _type_node(self.param_type, line=self.line, column=self.column)),
+                ("name", _identifier_node(self.name, line=name_line, column=name_column)),
+            ],
             paramType=self.param_type,
             identifier=self.name,
         )
@@ -530,21 +765,43 @@ class FuncDecl(ASTNode):
     params: list[Param]
     return_type: str
     body: Block
+    name_pos: Position | None = field(default=None, kw_only=True)
+    return_type_pos: Position | None = field(default=None, kw_only=True)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise this function, its parameters and its body.
+        """Serialise this function as four labelled branches.
+
+        ``name``, ``params``, ``returns`` and ``body`` -- never as one caption.
+        The old flattened signature survives as a ``signature`` field for the
+        tooltip, so the information is not lost, only demoted out of the label.
 
         Returns:
             A dictionary describing this subtree.
         """
         signature = ", ".join(f"{p.param_type} {p.name}" for p in self.params)
+        param_list = _synthetic(
+            "ParamList",
+            "list",
+            line=self.line,
+            column=self.column,
+            children=_indexed("param", self.params),
+            arity=len(self.params),
+        )
+        name_line, name_column = _at(self.name_pos, self.line, self.column)
+        type_line, type_column = _at(self.return_type_pos, self.line, self.column)
         return self._node_dict(
-            name=f"func {self.name}({signature}): {self.return_type}",
-            kind="function",
-            children=[*self.params, self.body],
+            "function",
+            detail=self.name,
+            children=[
+                ("name", _identifier_node(self.name, line=name_line, column=name_column)),
+                ("params", param_list),
+                ("returns", _type_node(self.return_type, line=type_line, column=type_column)),
+                ("body", self.body),
+            ],
             identifier=self.name,
             returnType=self.return_type,
             arity=len(self.params),
+            signature=f"func {self.name}({signature}): {self.return_type}",
         )
 
 
@@ -565,8 +822,7 @@ class Program(ASTNode):
             A dictionary describing the entire tree.
         """
         return self._node_dict(
-            name="program",
-            kind="program",
-            children=list(self.functions),
+            "program",
+            children=_indexed("func", self.functions),
             functionCount=len(self.functions),
         )
