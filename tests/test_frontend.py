@@ -286,14 +286,66 @@ class TestParseTreeContract:
     def test_every_node_kind_the_backend_emits_has_a_colour(self):
         """A kind with no colour renders in the fallback grey, losing meaning."""
         from app.ast_nodes import ASTNode
+        from app.lexer import tokenize
+        from app.parser import parse
 
         viz = SCRIPT_SOURCES["viz.js"]
         coloured = set(re.findall(r"^    (\w+): \"var\(", viz, re.MULTILINE))
 
+        # Two sources, because neither is complete alone: reading the class
+        # sources misses the kinds that the module-level synthetic-node helpers
+        # emit (Type, ParamList, ArgList), and one program cannot exercise every
+        # construct. Together they cover both.
         emitted = set()
         for subclass in ASTNode.__subclasses__():
             emitted.update(_kinds_of(subclass))
+
+        source = (
+            "func f(int n): int { int x = 1; x = -x + n * 2; g(x); "
+            "if (x > 0) { print(g(x)); } else { while (x < 9) { x = x + 1; } } "
+            "return x; }"
+        )
+        stack = [parse(tokenize(source).tokens).to_dict()]
+        while stack:
+            node = stack.pop()
+            emitted.add(node["kind"])
+            stack.extend(node["children"])
+
         assert emitted <= coloured, f"kinds with no colour: {sorted(emitted - coloured)}"
+
+    def test_the_tree_is_drawn_top_down(self):
+        """A syntax tree is drawn root-at-top in every compiler text."""
+        viz = SCRIPT_SOURCES["viz.js"]
+        assert "linkVertical" in viz
+        assert "linkHorizontal" not in viz, "the tree would render sideways"
+
+    def test_nodes_are_labelled_with_their_class_name(self):
+        """The box shows `BinaryOp`, never a flattened caption."""
+        viz = SCRIPT_SOURCES["viz.js"]
+        assert "d.data.node" in viz
+        assert "tree-node-class" in viz
+        assert "tree-node-value" in viz
+
+    def test_edges_are_labelled_with_the_role_they_fill(self):
+        """Without roles, `a - b` and `b - a` draw identically."""
+        viz = SCRIPT_SOURCES["viz.js"]
+        assert "d.target.data.edge" in viz
+        assert "tree-edge-label" in viz
+        assert ".tree-edge-label" in STYLE_CSS
+
+    def test_layout_separation_accounts_for_box_width(self):
+        """Fixed spacing would overlap the moment a label got long."""
+        viz = SCRIPT_SOURCES["viz.js"]
+        assert "separation(" in viz
+        assert "boxWidth(a)" in viz and "boxWidth(b)" in viz
+
+    def test_evaluation_order_toggle_is_wired_end_to_end(self):
+        """The control, the handler and the renderer must all agree."""
+        assert 'id="opt-eval-order"' in INDEX_HTML
+        assert "opt-eval-order" in APP_JS
+        assert "setEvalOrder" in APP_JS
+        assert "setEvalOrder(on)" in SCRIPT_SOURCES["viz.js"]
+        assert ".tree-svg.show-eval .tree-eval" in STYLE_CSS
 
     def test_measure_is_iterative_not_recursive(self):
         """A deep tree would otherwise risk the JS stack on every render."""

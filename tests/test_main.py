@@ -274,11 +274,36 @@ class TestSyntaxAnalysis:
         assert body["meta"]["reachedPhase"] == "parser"
 
     def test_ast_is_shaped_for_the_tree_renderer(self, client: TestClient, demo_source: str):
-        """D3's hierarchy layout reads `name` and `children` by default."""
+        """D3's hierarchy layout reads `children`; the box reads `node` and `detail`."""
         ast = client.post("/compile", json={"source": demo_source}).json()["ast"]
         assert isinstance(ast["name"], str)
         assert isinstance(ast["children"], list)
         assert ast["children"], "the demo program has functions to draw"
+        for key in ("node", "detail", "kind", "edge", "line", "column"):
+            assert key in ast, f"the renderer needs '{key}'"
+
+    def test_ast_over_the_wire_is_not_flattened(self, client: TestClient, demo_source: str):
+        """The whole point of the Syntax tab: structure as nodes, not captions."""
+        ast = client.post("/compile", json={"source": demo_source}).json()["ast"]
+
+        nodes = []
+        stack = [ast]
+        while stack:
+            node = stack.pop()
+            nodes.append(node)
+            stack.extend(node["children"])
+
+        classes = {node["node"] for node in nodes}
+        assert {"Identifier", "Type", "ParamList", "ArgList"} <= classes
+
+        # A signature belongs in the tooltip payload, never in a drawn label.
+        assert not any(node["name"].startswith("func ") for node in nodes)
+        assert any(node.get("signature", "").startswith("func ") for node in nodes)
+
+        # Every child names the role it fills, so the drawing is unambiguous.
+        for node in nodes:
+            for child in node["children"]:
+                assert child["edge"], f"{node['node']} -> {child['node']} has no role"
 
     def test_syntax_error_is_reported_and_ast_is_null(self, client: TestClient):
         body = client.post("/compile", json={"source": "func m(): void { int x = 5 }"}).json()
