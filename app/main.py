@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.ast_nodes import Program
 from app.lexer import tokenize
 from app.logging_config import configure_logging, get_logger
 from app.parser import ParseError, parse
@@ -50,6 +51,7 @@ from app.schemas import (
     RunRequest,
     RunResponse,
 )
+from app.semantic import analyse
 
 logger = get_logger(__name__)
 
@@ -62,7 +64,7 @@ INDEX_HTML: Final[Path] = STATIC_DIR / "index.html"
 #: Compilation phases that are fully implemented. Each step of the build adds
 #: one entry here, and ``GET /api/health`` reports it, which gives the frontend
 #: (and the marker) an honest picture of what is wired up.
-IMPLEMENTED_PHASES: Final[list[str]] = ["lexer", "parser"]
+IMPLEMENTED_PHASES: Final[list[str]] = ["lexer", "parser", "semantic"]
 
 
 @asynccontextmanager
@@ -255,17 +257,41 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
     # concrete derivation belonging to the Tier B table-driven parser.
     parse_started = time.perf_counter()
     function_count = 0
+    program: Program | None = None
     try:
         program = parse(lex_result.tokens)
     except ParseError as exc:
         response.errors.append(exc.to_api())
         response.meta.ok = False
     else:
-        response.ast = program.to_dict()
         response.meta.reached_phase = "parser"
         function_count = len(program.functions)
     parse_ms = (time.perf_counter() - parse_started) * 1000.0
     response.meta.timings.append(PhaseTiming(phase="parser", ms=round(parse_ms, 3)))
+
+    # --- Phase 3: semantic analysis ------------------------------------
+    # Only runs when the parser produced a tree: there is nothing to resolve
+    # names against otherwise. Type errors do not stop the pipeline -- they are
+    # reported alongside the artefacts, so the Semantic tab still shows the
+    # symbol table that was built before the first bad expression.
+    if program is not None:
+        semantic_started = time.perf_counter()
+        semantics = analyse(program)
+        semantic_ms = (time.perf_counter() - semantic_started) * 1000.0
+
+        response.symbols = semantics.symbols
+        response.type_errors = semantics.diagnostics
+        response.meta.reached_phase = "semantic"
+        if not semantics.ok:
+            response.meta.ok = False
+        response.meta.timings.append(PhaseTiming(phase="semantic", ms=round(semantic_ms, 3)))
+
+    # Serialised only once every phase that annotates the tree has run. The
+    # semantic analyser writes `inferred_type` onto the expression nodes in
+    # place, so a dictionary taken right after parsing would carry none of the
+    # type annotations the Syntax tab draws.
+    if program is not None:
+        response.ast = program.to_dict()
 
     response.meta.timings.append(
         PhaseTiming(phase="total", ms=round((time.perf_counter() - started) * 1000.0, 3))
@@ -280,6 +306,8 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
             "token_count": len(response.tokens),
             "lexical_errors": len(lex_result.errors),
             "functions": function_count,
+            "symbols": len(response.symbols),
+            "type_errors": len(response.type_errors),
             "total_errors": len(response.errors),
             "optimizations": request.optimizations.model_dump(),
         },
