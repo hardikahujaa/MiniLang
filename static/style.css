@@ -580,6 +580,37 @@ ul { margin: 0; padding: 0; list-style: none; }
 
 .vt-cat { color: var(--fg-faint); font-size: 11px; }
 
+/* ------------------- 9b. Symbol table (Semantic tab) --------------------- */
+/* Reuses the virtual-table row machinery wholesale; only the column track
+   differs, so scrolling, hover and row height stay identical to tab 2. */
+.sym-table .vt-header,
+.sym-table .vt-row {
+  grid-template-columns: 52px 1fr 150px 92px 1fr 84px 60px 54px;
+}
+
+.sym-c-name { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-c-type { color: var(--syn-type); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-c-scope {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sym-c-kind { overflow: hidden; }
+.sym-c-depth { color: var(--fg-faint); font-size: 11px; }
+
+.sym-kind {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  background: var(--bg-raised);
+}
+.sym-kind.kind-function  { color: var(--syn-func); }
+.sym-kind.kind-parameter { color: var(--violet); }
+.sym-kind.kind-variable  { color: var(--fg-muted); }
+
 /* --------------------------- 10. Output pane ----------------------------- */
 .outputpane {
   height: var(--output-h);
@@ -721,6 +752,16 @@ ul { margin: 0; padding: 0; list-style: none; }
 .tree-node-value {
   font: 11px var(--mono);
   fill: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Line 3: the type the semantic analyser inferred for this expression. Only
+   expressions carry one, so its absence on a statement node is meaningful. */
+.tree-node-type {
+  font: 600 9.5px var(--mono);
+  fill: var(--syn-type);
+  letter-spacing: 0.4px;
   pointer-events: none;
   user-select: none;
 }

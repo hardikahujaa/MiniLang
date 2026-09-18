@@ -35,6 +35,9 @@ let visibleTokens = [];
 /** The editor instance, created on DOMContentLoaded. */
 let editor = null;
 
+/** Symbol-table rows surviving the current filter. */
+let visibleSymbols = [];
+
 /** Handle returned by Viz.renderTree, exposing expand/collapse/reset. */
 let treeHandle = null;
 
@@ -122,8 +125,9 @@ function activateTab(name) {
   $$(".panel").forEach((panel) => {
     panel.classList.toggle("is-active", panel.id === `panel-${name}`);
   });
-  // Both of these measure their container, which is zero while hidden.
+  // These measure their container, which is zero while hidden.
   if (name === "lexical") renderTokenWindow();
+  if (name === "semantic") renderSymbolWindow();
   if (name === "syntax" && lastAst && !treeHandle) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
     applyEvalOrder();
@@ -210,6 +214,101 @@ function renderTokenWindow() {
         `<span class="vt-c-lex">${esc(token.lexeme) || "&nbsp;"}</span>` +
         `<span class="vt-c-ln">${token.line}</span>` +
         `<span class="vt-c-col">${token.col}</span>` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/* -------------------------------------------------------------------------
+   Symbol table (Semantic tab)
+   ------------------------------------------------------------------------- */
+
+/**
+ * Render a scope depth the way a textbook labels it.
+ *
+ * @param {number} depth - Nesting depth; 0 is the global scope.
+ * @returns {string} "Global" at depth 0, "Local-1", "Local-2" and so on below.
+ */
+function depthLabel(depth) {
+  return depth === 0 ? "Global" : `Local-${depth}`;
+}
+
+/**
+ * Render the scoped symbol table, filtered and windowed.
+ *
+ * Shows every name the program declared, including names whose scope has since
+ * closed: the analyser keeps an append-only log precisely so this tab can show
+ * the whole environment rather than whatever happened to be open at the end.
+ *
+ * @param {Array<Object>} symbols - Entries from `CompileResponse.symbols`.
+ * @returns {void}
+ */
+function renderSymbols(symbols) {
+  const rows = symbols || [];
+  const query = $("#symbol-filter").value.trim().toLowerCase();
+  visibleSymbols = !query
+    ? rows
+    : rows.filter(
+        (s) =>
+          s.name.toLowerCase().includes(query) ||
+          (s.type || "").toLowerCase().includes(query) ||
+          (s.kind || "").toLowerCase().includes(query) ||
+          (s.scope || "").toLowerCase().includes(query)
+      );
+
+  const hasRows = rows.length > 0;
+  $("#semantic-empty").hidden = hasRows;
+  $("#symbol-table-wrap").hidden = !hasRows;
+
+  const counts = {};
+  let deepest = 0;
+  rows.forEach((s) => {
+    const key = s.kind || "variable";
+    counts[key] = (counts[key] || 0) + 1;
+    if (s.depth > deepest) deepest = s.depth;
+  });
+
+  const parts = [`<span><b>${rows.length}</b> symbols</span>`];
+  Object.keys(counts)
+    .sort()
+    .forEach((key) => parts.push(`<span>${esc(key)}: <b>${counts[key]}</b></span>`));
+  parts.push(`<span>max depth <b>${deepest}</b></span>`);
+  if (query) parts.push(`<span>showing <b>${visibleSymbols.length}</b></span>`);
+  $("#symbol-stats").innerHTML = parts.join("");
+
+  $("#symbol-spacer").style.height = `${visibleSymbols.length * ROW_HEIGHT}px`;
+  renderSymbolWindow();
+}
+
+/**
+ * Draw only the symbol rows currently inside the viewport.
+ * @returns {void}
+ */
+function renderSymbolWindow() {
+  const viewport = $("#symbol-viewport");
+  const rows = $("#symbol-rows");
+  if (!viewport || !rows || $("#symbol-table-wrap").hidden) return;
+
+  const height = viewport.clientHeight || 400;
+  const first = Math.max(0, Math.floor(viewport.scrollTop / ROW_HEIGHT) - ROW_OVERSCAN);
+  const count = Math.ceil(height / ROW_HEIGHT) + ROW_OVERSCAN * 2;
+  const slice = visibleSymbols.slice(first, first + count);
+
+  rows.style.transform = `translateY(${first * ROW_HEIGHT}px)`;
+  rows.innerHTML = slice
+    .map((symbol, offset) => {
+      const kind = symbol.kind || "variable";
+      return (
+        '<div class="vt-row">' +
+        `<span class="vt-c-idx">${first + offset + 1}</span>` +
+        `<span class="sym-c-name">${esc(symbol.name)}</span>` +
+        `<span class="sym-c-type">${esc(symbol.type)}</span>` +
+        `<span class="sym-c-kind"><span class="sym-kind kind-${esc(kind)}">${esc(kind)}</span></span>` +
+        `<span class="sym-c-scope">${esc(symbol.scope || "global")}</span>` +
+        `<span class="sym-c-depth">${depthLabel(symbol.depth || 0)}</span>` +
+        `<span class="vt-c-ln">${symbol.line === null ? "" : symbol.line}</span>` +
+        `<span class="vt-c-col">${symbol.col === null ? "" : symbol.col}</span>` +
         "</div>"
       );
     })
@@ -384,6 +483,7 @@ function renderResult(result) {
 
   renderTokens(result.tokens || []);
   renderAst(result.ast || null);
+  renderSymbols(result.symbols || []);
   renderProblems(result.errors, result.typeErrors);
 
   $("#out-program").textContent = result.output || "";
@@ -723,7 +823,12 @@ function init() {
   $("#language-select").addEventListener("change", (e) => setLanguage(e.target.value));
   $("#token-filter").addEventListener("input", () => renderTokens((lastResult || {}).tokens || []));
   $("#token-viewport").addEventListener("scroll", renderTokenWindow, { passive: true });
+  $("#symbol-filter").addEventListener("input", () =>
+    renderSymbols((lastResult || {}).symbols || [])
+  );
+  $("#symbol-viewport").addEventListener("scroll", renderSymbolWindow, { passive: true });
   window.addEventListener("resize", renderTokenWindow);
+  window.addEventListener("resize", renderSymbolWindow);
 
   $$(".menu-item").forEach((button) =>
     button.addEventListener("click", (event) => {

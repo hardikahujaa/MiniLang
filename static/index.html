@@ -203,10 +203,36 @@
 
       <!-- ========================= 5. SEMANTIC ========================= -->
       <section class="panel" id="panel-semantic" role="tabpanel">
-        <div class="empty-state" data-step="Tier A &middot; step 4">
-          <p>Scoped symbol table and type diagnostics render here.</p>
+        <div class="pane-toolbar">
+          <div class="stat-row" id="symbol-stats"></div>
+          <div class="toolbar-spacer"></div>
+          <input
+            id="symbol-filter"
+            class="input input-sm"
+            type="search"
+            placeholder="Filter by name, type or scope…"
+            autocomplete="off" />
         </div>
-        <div id="symbol-table-wrap" hidden></div>
+        <div class="empty-state" id="semantic-empty" data-step="press Build">
+          <p>The scoped symbol table renders here: every name the program declares,
+             with its type, its kind, the scope that owns it and its nesting depth.</p>
+        </div>
+        <div id="symbol-table-wrap" class="virtual-table sym-table" hidden>
+          <div class="vt-header">
+            <span class="vt-c-idx">#</span>
+            <span class="sym-c-name">Name</span>
+            <span class="sym-c-type">Type</span>
+            <span class="sym-c-kind">Kind</span>
+            <span class="sym-c-scope">Scope</span>
+            <span class="sym-c-depth">Depth</span>
+            <span class="vt-c-ln">Line</span>
+            <span class="vt-c-col">Col</span>
+          </div>
+          <div class="vt-viewport" id="symbol-viewport">
+            <div class="vt-spacer" id="symbol-spacer"></div>
+            <div class="vt-rows" id="symbol-rows"></div>
+          </div>
+        </div>
       </section>
 
       <!-- ============================ 6. ICG =========================== -->
