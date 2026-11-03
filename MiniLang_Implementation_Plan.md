@@ -433,10 +433,10 @@ Enforced throughout, not retrofitted at the end:
 | A | 1. Scaffold, 8-tab UI, stubbed `/compile`, CI | done |
 | A | 2. Lexer + token table + IDE frontend | done |
 | A | 3. AST + recursive descent parser + D3 parse tree | done |
-| A | 4. Semantic analysis + symbol table | next |
-| A | 5. TAC + basic blocks + CFG | |
-| A | 6. Constant folding, propagation, DCE + toggles | |
-| A | 7. Codegen + stack VM + Run | |
+| A | 4. Semantic analysis + symbol table | done |
+| A | 5. TAC + basic blocks + CFG | done |
+| A | 6. Constant folding, propagation, DCE + toggles | done |
+| A | 7. Codegen + stack VM + Run | done |
 | B | 8-13. Parser theory lab, step animation, error recovery, benchmark | |
 | C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
 
@@ -451,3 +451,139 @@ Enforced throughout, not retrofitted at the end:
 * **Line endings** are pinned to LF via `.gitattributes`, because Git for
   Windows defaults to `core.autocrlf=true` and the suite compares a fixture
   byte-for-byte against a Python constant.
+
+## A.7 Step 5 (TAC + basic blocks + CFG): decisions made during the build
+
+`app/tac.py` carries the full rationale in its module docstring; this is the
+short version for anyone comparing the plan against what shipped.
+
+* **Two translation schemes, not one.** Every expression except `&&`/`||`
+  becomes *value* code (Aho et al.'s synthesized-place scheme: one instruction
+  per operator, operands evaluated left to right). `&&` and `||` are the one
+  exception, translated as *jumping* code so short-circuit evaluation is
+  real — `f() && g()` provably never calls `g()` when `f()` is false, because
+  the instruction that would call it sits behind a conditional jump, not
+  because the frontend trusts a commented promise.
+* **Basic blocks use the classical leader algorithm, plus one deliberate
+  extra rule:** every `label` instruction is unconditionally a leader, not
+  only the ones a jump actually targets. That extra rule, combined with
+  giving every function body a synthetic trailing `return` (even one that
+  already returns on every path, and even `void` functions that never wrote
+  one), is what guarantees two functions concatenated into one flat
+  instruction stream never pick up a spurious fall-through edge into each
+  other's basic blocks.
+* **The CFG is intraprocedural, by function.** `call` is not an edge in this
+  graph — MiniLang has no indirect calls, so each function's control-flow
+  graph is independent, and the backend now stamps every `BasicBlock` with
+  the `function` field that says which one it belongs to, which is also what
+  lets the ICG tab draw each function as its own labelled lane.
+* **ICG tab ships two sub-views, not a dump.** A flat instruction table alone
+  reads as noise; blocks alone lose the ordering. The tab shows the TAC
+  grouped by block (free, since each block already carries its own
+  instruction slice from the backend) with a toggle to the D3 control-flow
+  graph — same zoom/pan gestures as the Syntax tab's AST, so there is nothing
+  new to learn switching between them.
+
+## A.8 Step 6 (optimization passes): decisions made during the build
+
+`app/optimize.py` carries the full rationale in its module docstring; this is
+the short version.
+
+* **Three passes are local, one is global, and that asymmetry is load-bearing,
+  not an inconsistency.** Constant folding, constant propagation and common
+  subexpression elimination all operate within a single basic block, which
+  is what makes them sound without a real dataflow analysis -- there is only
+  one path through a block, so "the last assignment so far" is unambiguous.
+  Dead-code elimination has no such shortcut: a value assigned in one block
+  is routinely used in a successor reached through a branch or a loop, so it
+  runs a real backward liveness analysis (a fixpoint over the CFG) rather
+  than a per-block approximation that would be outright incorrect, not just
+  conservative. `tests/test_optimize.py::TestSoundness` exists specifically
+  to pin this: a definition live only across a branch, only inside a loop
+  body, or only through a loop's back-edge must all survive.
+* **Folding, propagation and CSE iterate to a fixpoint before DCE runs
+  once.** Each of the three can expose work for the other two -- propagating
+  a constant can make an op foldable; folding can make two computations'
+  operands match for CSE -- so running each once in a fixed order would miss
+  cascades. The demo program's own comments are the regression test:
+  `int limit = 5 * 2;` folds and propagates all the way into `param 10`
+  with no instruction called `limit` surviving, and `(3 + 4) * (3 + 4)`
+  collapses to `49` without CSE ever needing to fire, because each `3 + 4`
+  is already foldable alone.
+* **A call is never removed, regardless of whether its result is read.** It
+  may have side effects (it can itself `print`), so DCE's "is this op
+  removable at all" check excludes `call` unconditionally -- unlike a plain
+  copy or a pure operator, which is removable exactly when its result is
+  dead.
+* **Constant-condition branches are left alone on purpose.** Folding
+  `ifFalse true goto L` into an unconditional jump -- and then deleting the
+  now-unreachable branch -- is a real optimization (unreachable-code
+  elimination from constant propagation into control flow), but it is a
+  different one from the four asked for here, and doing it would mean
+  rewriting the CFG's edges, not just its instructions. Scoped out, not
+  missed.
+* **The Optimization tab shows before/after columns plus a change log, not a
+  line-level diff.** A change's `index` is only meaningful within the round
+  that produced it -- the instruction list shrinks every time DCE removes
+  something -- so aligning "before line 7" with "after line 7" by position
+  would be misleading once anything has been removed. The log's entries are
+  self-contained strings (`before`, `after`, `detail`) instead, which is
+  what actually answers "what happened and why" regardless of how the
+  indices moved around underneath it. Toggling a checkbox re-runs `/compile`
+  immediately, so the instruction counter visibly moves without a separate
+  Build click -- the plan's demo script assumes exactly that.
+
+## A.9 Step 7 (codegen + stack VM + Run): decisions made during the build
+
+`app/codegen.py` and `app/vm.py` carry the full rationale in their module
+docstrings; this is the short version.
+
+* **A real bug surfaced and got fixed first: shadowing.** `app/tac.py`
+  (step 5) used a declared variable's bare source name as its TAC place
+  directly, which meant `int x = 1; if (c) { int x = 2; }` silently aliased
+  the shadowed inner `x` onto the outer one -- the outer variable's value
+  was corrupted the moment the inner one was assigned. This was latent and
+  untested until codegen needed a *permanent, unique* stack slot per
+  variable to even be expressible. `TacGenerator` now keeps its own scope
+  stack mirroring `app.semantic.SymbolTable`'s rules exactly, so a
+  redeclaration gets a fresh place (`x`, then `x~1`, `x~2`, ...) instead of
+  colliding. Regression-tested at the TAC level (`TestShadowing` in
+  `tests/test_tac.py`) and again end-to-end through the VM
+  (`tests/test_vm.py::TestShadowing`).
+* **Frame layout is the textbook activation record, not a simplification of
+  it.** Parameters at negative offsets, locals at non-negative ones,
+  control link and return address in between, addressed through one
+  frame pointer -- Aho, Lam, Sethi & Ullman figure 7.9, not a toy
+  approximation. This is what makes real recursion (including mutual
+  recursion) work correctly with no special-casing: tested directly with a
+  recursive factorial and two mutually-recursive functions, not just the
+  demo program's iterative `fib`.
+* **Every jump and call target is a resolved integer address by the time the
+  VM sees it.** Codegen generates symbolically (label and function names as
+  placeholders) and backpatches every target to a concrete instruction
+  index in one final pass -- the classical two-pass assembler technique.
+  The VM therefore never looks a name up by string; it is purely an index
+  machine, which is both simpler to get right and closer to what a real
+  bytecode interpreter does.
+* **One shared module settles arithmetic and literal formatting for all
+  three phases.** `app/literals.py` is the single place `/` truncates
+  toward zero and `%` follows the dividend's sign (C semantics, not
+  Python's); `app.tac`, `app.optimize` and `app.vm` all call into it rather
+  than each carrying its own copy, which is what guarantees a value folded
+  at compile time and the same value computed at run time are provably
+  identical -- not just expected to match by convention.
+* **`halted` means exactly one thing: "did the step budget run out while
+  still running?"** Not "did it succeed." A clean return from `main` and a
+  runtime trap (division by zero, a stack underflow, a call to an
+  unresolved target) are both `halted=True`; `error` is what tells them
+  apart. Only a genuine step-budget exhaustion -- the guard against an
+  infinite MiniLang loop hanging the server -- is `halted=False`. Getting
+  this backwards was an actual bug caught by a pre-existing test
+  (`test_accepts_empty_program`) that encoded the field's real contract
+  before the VM existed to honour it.
+* **The Run button runs what Build produced, not what the editor holds
+  now.** The frontend posts `lastResult.asm` back to `/run`, which recovers
+  `main`'s entry address by scanning the assembly for its own `LABEL`
+  rather than keeping it as separate state that could drift out of sync.
+  Editing the source after a build and pressing Run without rebuilding
+  therefore runs the last build, matching the button's own disabled state.

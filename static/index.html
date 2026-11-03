@@ -113,16 +113,16 @@
       <button class="tab" role="tab" data-tab="syntax" title="Parse tree - run Build to populate" aria-selected="false">
         <span class="tab-num">4</span>Syntax
       </button>
-      <button class="tab" role="tab" data-tab="semantic" title="Arrives in Tier A step 4 - scoped symbol table and type checking" aria-selected="false">
+      <button class="tab" role="tab" data-tab="semantic" title="Scoped symbol table and type checking - run Build to populate" aria-selected="false">
         <span class="tab-num">5</span>Semantic
       </button>
-      <button class="tab" role="tab" data-tab="icg" title="Arrives in Tier A step 5 - three-address code and control-flow graph" aria-selected="false">
+      <button class="tab" role="tab" data-tab="icg" title="Three-address code and control-flow graph - run Build to populate" aria-selected="false">
         <span class="tab-num">6</span>ICG
       </button>
-      <button class="tab" role="tab" data-tab="optimization" title="Arrives in Tier A step 6 - toggle each pass and see the diff" aria-selected="false">
+      <button class="tab" role="tab" data-tab="optimization" title="Four optimisation passes, before/after diff - run Build to populate" aria-selected="false">
         <span class="tab-num">7</span>Optimization
       </button>
-      <button class="tab" role="tab" data-tab="target" title="Arrives in Tier A step 7 - stack-VM assembly and a Run button" aria-selected="false">
+      <button class="tab" role="tab" data-tab="target" title="Stack-VM assembly and a Run button - run Build to populate" aria-selected="false">
         <span class="tab-num">8</span>Target
       </button>
     </nav>
@@ -237,47 +237,81 @@
 
       <!-- ============================ 6. ICG =========================== -->
       <section class="panel" id="panel-icg" role="tabpanel">
-        <div class="empty-state" data-step="Tier A &middot; step 5">
+        <div class="pane-toolbar" id="icg-toolbar" hidden>
+          <div class="stat-row" id="icg-stats"></div>
+          <div class="toolbar-spacer"></div>
+          <div class="seg-toggle" role="tablist" aria-label="ICG view">
+            <button class="seg-btn is-active" id="btn-icg-tac" type="button" data-icg-view="tac">
+              Three-address code
+            </button>
+            <button class="seg-btn" id="btn-icg-cfg" type="button" data-icg-view="cfg">
+              Control-flow graph
+            </button>
+          </div>
+        </div>
+        <div class="empty-state" id="icg-empty" data-step="press Build">
           <p>Three-address code, basic blocks and the D3 control-flow graph render here.</p>
         </div>
-        <div id="tac-wrap" hidden></div>
-        <div id="cfg-wrap" hidden></div>
+        <div id="tac-wrap" class="icg-view" hidden></div>
+        <div id="cfg-wrap" class="icg-view tree-host" hidden></div>
       </section>
 
       <!-- ======================= 7. OPTIMIZATION ======================= -->
       <section class="panel" id="panel-optimization" role="tabpanel">
         <div class="pane-toolbar">
           <div class="opt-toggles" id="opt-toggles">
-            <label class="toggle">
+            <label class="toggle" title="Evaluate an instruction at compile time when both its operands are already literal constants">
               <input type="checkbox" data-opt="constantFolding" checked />
               <span>Constant folding</span>
             </label>
-            <label class="toggle">
+            <label class="toggle" title="Substitute a place's known constant value into its later uses, within one basic block">
               <input type="checkbox" data-opt="constantPropagation" checked />
               <span>Constant propagation</span>
             </label>
-            <label class="toggle">
-              <input type="checkbox" data-opt="deadCodeElimination" checked />
-              <span>Dead code elimination</span>
-            </label>
-            <label class="toggle">
+            <label class="toggle" title="Reuse an earlier identical computation within one basic block instead of recomputing it">
               <input type="checkbox" data-opt="commonSubexpressionElimination" />
               <span>Common subexpression elimination</span>
             </label>
+            <label class="toggle" title="Remove an instruction whose result is never used on any path, via global liveness over the whole CFG">
+              <input type="checkbox" data-opt="deadCodeElimination" checked />
+              <span>Dead code elimination</span>
+            </label>
           </div>
+          <div class="toolbar-spacer"></div>
+          <div class="stat-row" id="opt-stats"></div>
         </div>
-        <div class="empty-state" data-step="Tier A &middot; step 6">
+        <div class="empty-state" id="opt-empty" data-step="press Build">
           <p>Side-by-side before/after diff and the instruction-count delta render here.</p>
         </div>
-        <div id="opt-wrap" hidden></div>
+        <div id="opt-wrap" class="opt-layout" hidden>
+          <div class="opt-columns">
+            <div class="opt-col">
+              <div class="opt-col-head">Before <span class="opt-col-count" id="opt-before-count"></span></div>
+              <div class="opt-col-body" id="opt-before-body"></div>
+            </div>
+            <div class="opt-col">
+              <div class="opt-col-head">After <span class="opt-col-count" id="opt-after-count"></span></div>
+              <div class="opt-col-body" id="opt-after-body"></div>
+            </div>
+          </div>
+          <div class="opt-log-pane">
+            <div class="opt-log-head">Change log</div>
+            <div class="opt-log-body" id="opt-log-body"></div>
+          </div>
+        </div>
       </section>
 
       <!-- ========================== 8. TARGET ========================== -->
       <section class="panel" id="panel-target" role="tabpanel">
-        <div class="empty-state" data-step="Tier A &middot; step 7">
+        <div class="pane-toolbar">
+          <div class="stat-row" id="asm-stats"></div>
+          <div class="toolbar-spacer"></div>
+          <span class="asm-run-status" id="asm-run-status"></span>
+        </div>
+        <div class="empty-state" id="asm-empty" data-step="press Build">
           <p>Stack-VM assembly renders here; the Run button executes it.</p>
         </div>
-        <div id="asm-wrap" hidden></div>
+        <div id="asm-wrap" class="icg-view" hidden></div>
       </section>
 
     </div><!-- /.panels -->

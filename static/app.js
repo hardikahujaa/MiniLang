@@ -44,6 +44,15 @@ let treeHandle = null;
 /** The AST most recently returned by /compile, kept for re-rendering. */
 let lastAst = null;
 
+/** `{tac, blocks, cfg}` from the most recent /compile, kept for re-rendering. */
+let lastIcg = null;
+
+/** Handle returned by Viz.renderCfg, exposing resetView. */
+let cfgHandle = null;
+
+/** Which ICG sub-view is showing: `"tac"` or `"cfg"`. */
+let icgView = "tac";
+
 /* -------------------------------------------------------------------------
    DOM helpers
    ------------------------------------------------------------------------- */
@@ -132,6 +141,7 @@ function activateTab(name) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
     applyEvalOrder();
   }
+  if (name === "icg") drawCfgIfVisible();
 }
 
 /**
@@ -316,6 +326,321 @@ function renderSymbolWindow() {
 }
 
 /* -------------------------------------------------------------------------
+   Three-address code and the control-flow graph (ICG tab)
+   ------------------------------------------------------------------------- */
+
+/** CSS class naming the colour a TAC row's op is drawn in. */
+function tacRowClass(op) {
+  if (op === "label") return "is-label";
+  if (op === "goto" || op === "if" || op === "ifFalse") return "is-jump";
+  if (op === "return") return "is-return";
+  if (op === "call" || op === "param") return "is-call";
+  if (op === "print") return "is-print";
+  return "";
+}
+
+/**
+ * Switch between the flat TAC listing and the D3 control-flow graph.
+ * @param {"tac"|"cfg"} name - The sub-view to show.
+ * @returns {void}
+ */
+function activateIcgView(name) {
+  icgView = name;
+  $$("#icg-toolbar .seg-btn").forEach((btn) =>
+    btn.classList.toggle("is-active", btn.dataset.icgView === name)
+  );
+  $("#tac-wrap").hidden = name !== "tac" || !lastIcg;
+  $("#cfg-wrap").hidden = name !== "cfg" || !lastIcg;
+  drawCfgIfVisible();
+}
+
+/**
+ * Draw the CFG once its container is actually visible.
+ *
+ * An SVG laid out inside a `display: none` container measures zero, so this
+ * is called both when the ICG tab is activated and when the sub-view toggle
+ * switches to "cfg" -- whichever happens last is what makes the panel
+ * visible, and either one needs to trigger the draw.
+ *
+ * @returns {void}
+ */
+function drawCfgIfVisible() {
+  if (!lastIcg || icgView !== "cfg" || cfgHandle) return;
+  if (!$("#panel-icg").classList.contains("is-active")) return;
+  cfgHandle = window.Viz.renderCfg("#cfg-wrap", lastIcg.cfg);
+}
+
+/**
+ * Render the ICG tab: the flat TAC listing, grouped by basic block, plus the
+ * control-flow graph those blocks imply.
+ *
+ * Grouping is free: each block from `CompileResponse.blocks` already carries
+ * the slice of `tac` it owns, so this does no re-slicing of its own.
+ *
+ * @param {Array<Object>} tac - Entries from `CompileResponse.tac`.
+ * @param {Array<Object>} blocks - Entries from `CompileResponse.blocks`.
+ * @param {Object|null} cfg - `CompileResponse.cfg`.
+ * @returns {void}
+ */
+function renderIcg(tac, blocks, cfg) {
+  const rows = tac || [];
+  lastIcg = rows.length > 0 ? { tac: rows, blocks: blocks || [], cfg: cfg || null } : null;
+  cfgHandle = null;
+  window.Viz.clear("#cfg-wrap");
+
+  const hasTac = lastIcg !== null;
+  $("#icg-empty").hidden = hasTac;
+  $("#icg-toolbar").hidden = !hasTac;
+  $("#tac-wrap").hidden = !hasTac || icgView !== "tac";
+  $("#cfg-wrap").hidden = !hasTac || icgView !== "cfg";
+
+  if (!hasTac) {
+    $("#tac-wrap").innerHTML = "";
+    return;
+  }
+
+  const functionCount = new Set((blocks || []).map((b) => b.function).filter(Boolean)).size;
+  $("#icg-stats").innerHTML =
+    `<span><b>${rows.length}</b> instructions</span>` +
+    `<span><b>${(blocks || []).length}</b> basic blocks</span>` +
+    `<span><b>${functionCount}</b> function(s)</span>`;
+
+  $("#tac-wrap").innerHTML = (blocks || [])
+    .map((block) => {
+      const instrRows = (block.instructions || [])
+        .map(
+          (instr) =>
+            '<div class="tac-row">' +
+            `<span class="tac-idx">${instr.index}</span>` +
+            `<span class="tac-text ${tacRowClass(instr.op)}">${esc(instr.text)}</span>` +
+            "</div>"
+        )
+        .join("");
+      const successors = block.successors.length ? block.successors.join(", ") : "exit";
+      return (
+        '<div class="tac-block">' +
+        '<div class="tac-block-head">' +
+        `<span class="tac-block-id">${esc(block.id)}</span>` +
+        (block.function ? `<span class="tac-block-fn">${esc(block.function)}</span>` : "") +
+        `<span class="tac-block-succ">&rarr; ${esc(successors)}</span>` +
+        "</div>" +
+        `<div class="tac-block-body">${instrRows}</div>` +
+        "</div>"
+      );
+    })
+    .join("");
+
+  drawCfgIfVisible();
+}
+
+/* -------------------------------------------------------------------------
+   Optimization tab
+   ------------------------------------------------------------------------- */
+
+/**
+ * Render one TAC listing as plain rows, reusing the ICG tab's row colouring.
+ * @param {Array<Object>} instructions - Entries from a `TacInstruction` list.
+ * @returns {string} The rendered HTML.
+ */
+function renderTacColumn(instructions) {
+  return (instructions || [])
+    .map(
+      (instr) =>
+        '<div class="tac-row">' +
+        `<span class="tac-idx">${instr.index}</span>` +
+        `<span class="tac-text ${tacRowClass(instr.op)}">${esc(instr.text)}</span>` +
+        "</div>"
+    )
+    .join("");
+}
+
+/**
+ * Render the optimisation change log: one entry per instruction rewritten or
+ * removed, across every pass and every round.
+ * @param {Array<Object>} log - Entries from `CompileResponse.optimized.log`.
+ * @returns {string} The rendered HTML.
+ */
+function renderOptLog(log) {
+  if (!log || log.length === 0) {
+    return '<div class="out-empty">No changes - every enabled pass found nothing to do.</div>';
+  }
+  return log
+    .map((change) => {
+      const after = change.after === null || change.after === undefined
+        ? '<span class="opt-log-removed">removed</span>'
+        : `<code>${esc(change.after)}</code>`;
+      return (
+        '<div class="opt-log-row">' +
+        `<span class="opt-log-pass pass-${esc(change.passName)}">${esc(change.passName)}</span>` +
+        `<span class="opt-log-change"><code>${esc(change.before || "")}</code> &rarr; ${after}</span>` +
+        `<span class="opt-log-detail">${esc(change.detail || "")}</span>` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/**
+ * Render the Optimization tab: before/after TAC columns plus the change log.
+ *
+ * Re-rendered after every build, which is also triggered by toggling one of
+ * the four pass checkboxes -- see `init()` -- so flipping a checkbox and
+ * watching the instruction counter move is immediate, matching the demo
+ * script's "toggle each optimization one at a time" beat.
+ *
+ * @param {Array<Object>} before - `CompileResponse.tac`, pre-optimisation.
+ * @param {Object|null} optimized - `CompileResponse.optimized`.
+ * @returns {void}
+ */
+function renderOptimization(before, optimized) {
+  const hasData = Boolean(optimized) && (before || []).length > 0;
+  $("#opt-empty").hidden = hasData;
+  $("#opt-wrap").hidden = !hasData;
+  if (!hasData) return;
+
+  const stats = optimized.stats || {};
+  const parts = [
+    `<span><b>${stats.instructionsBefore || 0}</b> before</span>`,
+    `<span><b>${stats.instructionsAfter || 0}</b> after</span>`,
+    `<span><b>-${stats.removed || 0}</b> removed</span>`,
+  ];
+  Object.keys(stats.perPass || {})
+    .sort()
+    .forEach((pass) => parts.push(`<span>${esc(pass)}: <b>${stats.perPass[pass]}</b></span>`));
+  $("#opt-stats").innerHTML = parts.join("");
+
+  $("#opt-before-count").textContent = `${before.length} instructions`;
+  $("#opt-after-count").textContent = `${(optimized.tac || []).length} instructions`;
+  $("#opt-before-body").innerHTML = renderTacColumn(before);
+  $("#opt-after-body").innerHTML = renderTacColumn(optimized.tac);
+  $("#opt-log-body").innerHTML = renderOptLog(optimized.log);
+}
+
+/* -------------------------------------------------------------------------
+   Target tab (stack-VM assembly + Run)
+   ------------------------------------------------------------------------- */
+
+/** CSS class naming the colour an assembly row's mnemonic is drawn in. */
+function asmRowClass(op) {
+  if (op === "LABEL") return "is-label";
+  if (op === "JMP" || op === "JMPT" || op === "JMPF") return "is-jump";
+  if (op === "CALL" || op === "RET" || op === "RETV") return "is-call";
+  if (op === "PRINT") return "is-print";
+  return "";
+}
+
+/**
+ * Render the Target tab: the resolved stack-VM assembly listing.
+ * @param {Array<Object>} asm - Entries from `CompileResponse.asm`.
+ * @returns {void}
+ */
+function renderTarget(asm) {
+  const rows = asm || [];
+  const hasAsm = rows.length > 0;
+  $("#asm-empty").hidden = hasAsm;
+  $("#asm-wrap").hidden = !hasAsm;
+  $("#asm-run-status").textContent = "";
+
+  if (!hasAsm) {
+    $("#asm-wrap").innerHTML = "";
+    return;
+  }
+
+  // A function's own label is bare (e.g. "fib"); every internal label app.tac
+  // generates is suffixed "_L<n>" (e.g. "fib_L0"), so counting labels without
+  // that suffix counts functions without needing a dedicated API field.
+  const functionCount = rows.filter(
+    (i) => i.op === "LABEL" && i.operand && !/_L\d+$/.test(i.operand)
+  ).length;
+  $("#asm-stats").innerHTML =
+    `<span><b>${rows.length}</b> instructions</span>` +
+    `<span><b>${functionCount}</b> function(s)</span>`;
+
+  $("#asm-wrap").innerHTML = rows
+    .map((instr) => {
+      const comment = instr.comment
+        ? ` <span class="asm-comment">; ${esc(instr.comment)}</span>`
+        : "";
+      return (
+        '<div class="tac-row">' +
+        `<span class="tac-idx">${instr.index}</span>` +
+        `<span class="tac-text ${asmRowClass(instr.op)}">${esc(instr.text)}</span>${comment}` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/**
+ * Reflect a `/run` result in the Target tab's status chip.
+ * @param {Object} result - A parsed `RunResponse`.
+ * @returns {void}
+ */
+function renderRunStatus(result) {
+  const chip = $("#asm-run-status");
+  if (result.error) {
+    chip.className = "asm-run-status is-error";
+    chip.textContent = `trapped after ${result.steps} step(s): ${result.error}`;
+  } else if (!result.halted) {
+    chip.className = "asm-run-status is-warn";
+    chip.textContent = `step budget exhausted after ${result.steps} step(s)`;
+  } else {
+    chip.className = "asm-run-status is-ok";
+    chip.textContent = `halted after ${result.steps} step(s)`;
+  }
+}
+
+/**
+ * Send the last build's assembly to `/run` and show the captured output.
+ *
+ * Deliberately runs what Build actually produced (`lastResult.asm`), not a
+ * silent recompile of whatever the editor holds now -- Run means "run what
+ * I built", matching the button's own disabled state, which tracks
+ * `lastResult.asm` rather than the editor's contents.
+ *
+ * @returns {Promise<void>} Resolves once the result has been rendered.
+ */
+async function runProgram() {
+  if (!lastResult || !lastResult.asm || lastResult.asm.length === 0) return;
+
+  setStatus("working", "Running…");
+  try {
+    const response = await fetch("/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asm: lastResult.asm }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      setStatus("error", `Run failed — HTTP ${response.status}`);
+      log(`run HTTP ${response.status}: ${detail.slice(0, 400)}`);
+      activateOutTab("build");
+      return;
+    }
+
+    const result = await response.json();
+    $("#out-program").textContent = result.output || "";
+    activateOutTab("program");
+    renderRunStatus(result);
+
+    if (result.error) {
+      setStatus("error", `Run trapped: ${result.error}`);
+      log(`run trapped after ${result.steps} step(s): ${result.error}`);
+    } else if (!result.halted) {
+      setStatus("error", `Run did not halt within ${result.steps} step(s)`);
+      log(`run exhausted its step budget after ${result.steps} step(s)`);
+    } else {
+      setStatus("ok", `Run finished — ${result.steps} step(s)`);
+      log(`run finished in ${result.steps} step(s)`);
+    }
+  } catch (err) {
+    setStatus("error", "Backend unreachable");
+    log(`run fetch failed: ${err.message}`);
+  }
+}
+
+/* -------------------------------------------------------------------------
    Problems
    ------------------------------------------------------------------------- */
 
@@ -484,6 +809,9 @@ function renderResult(result) {
   renderTokens(result.tokens || []);
   renderAst(result.ast || null);
   renderSymbols(result.symbols || []);
+  renderIcg(result.tac || [], result.blocks || [], result.cfg || null);
+  renderOptimization(result.tac || [], result.optimized || null);
+  renderTarget(result.asm || []);
   renderProblems(result.errors, result.typeErrors);
 
   $("#out-program").textContent = result.output || "";
@@ -815,6 +1143,7 @@ function init() {
   );
 
   $("#btn-compile").addEventListener("click", build);
+  $("#btn-run").addEventListener("click", runProgram);
   $("#btn-toggle-output").addEventListener("click", toggleOutput);
   $("#btn-tree-expand").addEventListener("click", () => treeHandle && treeHandle.expandAll());
   $("#btn-tree-collapse").addEventListener("click", () => treeHandle && treeHandle.collapseAll());
@@ -827,8 +1156,17 @@ function init() {
     renderSymbols((lastResult || {}).symbols || [])
   );
   $("#symbol-viewport").addEventListener("scroll", renderSymbolWindow, { passive: true });
+  $$("#icg-toolbar .seg-btn").forEach((btn) =>
+    btn.addEventListener("click", () => activateIcgView(btn.dataset.icgView))
+  );
+  $$("#opt-toggles input[data-opt]").forEach((input) =>
+    input.addEventListener("change", () => {
+      if (lastResult) build();
+    })
+  );
   window.addEventListener("resize", renderTokenWindow);
   window.addEventListener("resize", renderSymbolWindow);
+  window.addEventListener("resize", () => cfgHandle && cfgHandle.resetView());
 
   $$(".menu-item").forEach((button) =>
     button.addEventListener("click", (event) => {

@@ -271,7 +271,7 @@ class TestSyntaxAnalysis:
         assert body["ast"] is not None
         assert body["ast"]["node"] == "Program"
         assert body["ast"]["functionCount"] == 2
-        assert body["meta"]["reachedPhase"] == "semantic"
+        assert body["meta"]["reachedPhase"] == "codegen"
 
     def test_ast_is_shaped_for_the_tree_renderer(self, client: TestClient, demo_source: str):
         """D3's hierarchy layout reads `children`; the box reads `node` and `detail`."""
@@ -351,6 +351,9 @@ class TestSyntaxAnalysis:
             "lexer",
             "parser",
             "semantic",
+            "tac",
+            "optimize",
+            "codegen",
         ]
 
 
@@ -424,7 +427,7 @@ class TestSemanticAnalysis:
         body = client.post("/compile", json={"source": demo_source}).json()
         assert body["typeErrors"] == []
         assert body["meta"]["ok"] is True
-        assert body["meta"]["reachedPhase"] == "semantic"
+        assert body["meta"]["reachedPhase"] == "codegen"
 
     def test_symbol_table_is_returned(self, client: TestClient, demo_source: str):
         body = client.post("/compile", json={"source": demo_source}).json()
@@ -441,7 +444,7 @@ class TestSemanticAnalysis:
     def test_semantic_timing_is_recorded(self, client: TestClient, demo_source: str):
         body = client.post("/compile", json={"source": demo_source}).json()
         phases = [t["phase"] for t in body["meta"]["timings"]]
-        assert phases == ["lexer", "parser", "semantic", "total"]
+        assert phases == ["lexer", "parser", "semantic", "tac", "optimize", "codegen", "total"]
 
     def test_type_errors_are_reported_with_positions(self, client: TestClient):
         body = client.post("/compile", json={"source": "func m(): void { int x = 1.5; }"}).json()

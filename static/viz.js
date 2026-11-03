@@ -6,7 +6,7 @@
    pixels. Each build step adds one renderer:
 
      Tier A, step 3 -> Viz.renderTree      (AST / parse tree)   <- implemented
-     Tier A, step 5 -> Viz.renderCfg       (control-flow graph)
+     Tier A, step 5 -> Viz.renderCfg       (control-flow graph) <- implemented
      Tier B, step 8 -> Viz.renderAutomaton (LR(0) item sets, DFA)
 
    D3 is vendored at static/lib/d3.v7.min.js, so nothing here needs a network.
@@ -741,12 +741,371 @@ const Viz = (() => {
     };
   }
 
+  /* ---------------------------------------------------------------------
+     Control-flow graph (ICG tab)
+
+     Drawn top-down per function, exactly like a textbook CFG figure: each
+     basic block is a box holding its own three-address code, laid out by
+     BFS distance from the function's entry block so that depth reads as
+     "how many branches away from the top". Two or more functions are two or
+     more disconnected components (MiniLang has no indirect calls, so `call`
+     is deliberately not drawn as an edge -- see app/tac.py); each gets its
+     own lane, side by side, labelled by the function it belongs to.
+
+     A forward edge (to a strictly deeper level) is drawn as a straight
+     vertical curve, same as the AST tree. A loop's back edge -- target at
+     the same level or shallower -- would otherwise retrace a forward edge
+     exactly in reverse, so it is bowed out to the side instead, which is
+     the conventional way a compiler text draws a loop closing.
+     --------------------------------------------------------------------- */
+
+  /** Fixed column width every CFG node reserves, regardless of its own box width. */
+  const CFG_CELL_W = 260;
+
+  /** Vertical distance between one level and the next, in pixels. */
+  const CFG_ROW_H = 130;
+
+  /** Horizontal gap, in pixels, left between two disconnected components. */
+  const CFG_COMPONENT_GAP = 70;
+
+  /** Width bounds for a block box, in pixels. */
+  const CFG_MIN_W = 150;
+  const CFG_MAX_W = 236;
+
+  /** Height, in pixels, of a block box's header row (its id and function). */
+  const CFG_HEAD_H = 22;
+
+  /** Height, in pixels, of one instruction line inside a block box. */
+  const CFG_LINE_H = 15;
+
+  /** Instruction lines shown before a block box is truncated with "+N more". */
+  const CFG_MAX_LINES = 7;
+
+  /** Resolve a CSS custom property to its computed value. */
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  /**
+   * Classify a CFG edge label into one of four fixed colour roles.
+   * @param {string|null} label - The edge's label, e.g. `"true"`.
+   * @returns {string} `"ok"`, `"err"`, `"faint"` or `"accent"`.
+   */
+  function edgeRole(label) {
+    if (label === "true") return "ok";
+    if (label === "false") return "err";
+    if (label === "fall-through") return "faint";
+    return "accent";
+  }
+
+  /** CSS custom property backing each edge role's colour. */
+  const EDGE_ROLE_VAR = { ok: "--ok", err: "--err", faint: "--fg-faint", accent: "--accent" };
+
+  /**
+   * Font used inside a CFG block's instruction lines.
+   * @returns {string} A CSS shorthand font value.
+   */
+  function cfgLineFont() {
+    return `11px ${monoFamily()}`;
+  }
+
+  /**
+   * Render a basic block's instruction text, truncated to a line budget.
+   * @param {Object} block - A `BasicBlock` from `CompileResponse.blocks`.
+   * @returns {string[]} The lines to draw inside the box, in order.
+   */
+  function cfgBlockLines(block) {
+    const all = (block.instructions || []).map((instr) => instr.text);
+    if (all.length <= CFG_MAX_LINES) return all;
+    const shown = all.slice(0, CFG_MAX_LINES - 1);
+    shown.push(`… +${all.length - (CFG_MAX_LINES - 1)} more`);
+    return shown;
+  }
+
+  /**
+   * Render a control-flow graph: one box per basic block, showing its own
+   * three-address code, linked by labelled edges.
+   *
+   * Interaction: scroll to zoom, drag to pan -- same gesture set as the AST
+   * tree, so switching between the Syntax and ICG tabs needs no relearning.
+   *
+   * @param {string} selector - CSS selector of the container element.
+   * @param {Object} cfg - A `CfgView`: `{nodes, edges, entry, exits}`.
+   * @returns {Object|null} A handle exposing `resetView`, or null if nothing
+   *   could be drawn.
+   */
+  function renderCfg(selector, cfg) {
+    const host = clear(selector);
+    if (!host) return null;
+
+    if (!isAvailable()) {
+      placeholder(selector, "D3 failed to load, so the graph cannot be drawn.");
+      return null;
+    }
+    if (!cfg || !Array.isArray(cfg.nodes) || cfg.nodes.length === 0) {
+      placeholder(selector, "No control-flow graph to display. Press Build.");
+      return null;
+    }
+
+    const d3 = window.d3;
+    const width = host.clientWidth || 900;
+    const height = host.clientHeight || 600;
+    const nodes = cfg.nodes;
+    const edges = cfg.edges || [];
+
+    // --- layering: BFS distance from each component's entry block --------
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const indegree = new Map(nodes.map((n) => [n.id, 0]));
+    edges.forEach((e) => indegree.set(e.target, (indegree.get(e.target) || 0) + 1));
+
+    const roots = nodes.filter((n) => (indegree.get(n.id) || 0) === 0).map((n) => n.id);
+    if (roots.length === 0) roots.push(nodes[0].id);
+
+    const level = new Map();
+    const componentOf = new Map();
+    roots.forEach((rootId, componentIndex) => {
+      if (level.has(rootId)) return;
+      level.set(rootId, 0);
+      componentOf.set(rootId, componentIndex);
+      const queue = [rootId];
+      while (queue.length > 0) {
+        const id = queue.shift();
+        const current = byId.get(id);
+        (current.successors || []).forEach((succId) => {
+          if (!level.has(succId) && byId.has(succId)) {
+            level.set(succId, level.get(id) + 1);
+            componentOf.set(succId, componentIndex);
+            queue.push(succId);
+          }
+        });
+      }
+    });
+    // A node no root could reach (should not happen; defensive) gets its own slot.
+    let strayComponent = roots.length;
+    nodes.forEach((n) => {
+      if (!level.has(n.id)) {
+        level.set(n.id, 0);
+        componentOf.set(n.id, strayComponent);
+        strayComponent += 1;
+      }
+    });
+
+    // --- sizing: each box measures its own header and instruction lines --
+    nodes.forEach((n) => {
+      const lines = cfgBlockLines(n);
+      const widest = Math.max(
+        textWidth(`${n.id}  ${n.function || ""}`, classFont()),
+        ...lines.map((line) => textWidth(line, cfgLineFont())),
+        0
+      );
+      n.boxW = Math.max(CFG_MIN_W, Math.min(CFG_MAX_W, Math.ceil(widest) + PAD_X * 2));
+      n.boxH = CFG_HEAD_H + lines.length * CFG_LINE_H + 10;
+      n.lines = lines;
+    });
+
+    // --- positions: group by (component, level), spread evenly per row ---
+    const componentCount = new Set(componentOf.values()).size;
+    const byComponent = Array.from({ length: componentCount }, () => new Map());
+    nodes.forEach((n) => {
+      const rows = byComponent[componentOf.get(n.id)];
+      const lvl = level.get(n.id);
+      if (!rows.has(lvl)) rows.set(lvl, []);
+      rows.get(lvl).push(n.id);
+    });
+
+    let originX = 0;
+    byComponent.forEach((rows) => {
+      let widestRow = 1;
+      rows.forEach((ids) => {
+        widestRow = Math.max(widestRow, ids.length);
+      });
+      const componentW = widestRow * CFG_CELL_W;
+      rows.forEach((ids, lvl) => {
+        ids.forEach((id, i) => {
+          const node = byId.get(id);
+          node.x = originX + componentW / 2 + (i - (ids.length - 1) / 2) * CFG_CELL_W;
+          node.y = lvl * CFG_ROW_H + 50;
+        });
+      });
+      originX += componentW + CFG_COMPONENT_GAP;
+    });
+
+    // --- draw --------------------------------------------------------------
+    const svg = d3
+      .select(host)
+      .append("svg")
+      .attr("class", "cfg-svg")
+      .attr("width", "100%")
+      .attr("height", "100%");
+
+    const defs = svg.append("defs");
+    Object.keys(EDGE_ROLE_VAR).forEach((role) => {
+      defs
+        .append("marker")
+        .attr("id", `cfg-arrow-${role}`)
+        .attr("viewBox", "0 0 10 10")
+        .attr("refX", 8)
+        .attr("refY", 5)
+        .attr("markerWidth", 7)
+        .attr("markerHeight", 7)
+        .attr("orient", "auto-start-reverse")
+        .append("path")
+        .attr("d", "M0,0L10,5L0,10Z")
+        .attr("fill", cssVar(EDGE_ROLE_VAR[role]));
+    });
+
+    const viewport = svg.append("g");
+    const linkLayer = viewport.append("g").attr("class", "cfg-links");
+    const labelLayer = viewport.append("g").attr("class", "cfg-edge-labels");
+    const nodeLayer = viewport.append("g").attr("class", "cfg-nodes");
+
+    const zoom = d3
+      .zoom()
+      .scaleExtent([0.1, 2.5])
+      .on("zoom", (event) => viewport.attr("transform", event.transform));
+    svg.call(zoom);
+
+    /**
+     * Path for one edge. Forward edges (to a deeper level) curve straight
+     * down, box-edge to box-edge; a back or lateral edge bows out to the
+     * side so it cannot retrace a forward edge in reverse.
+     *
+     * @param {Object} source - The edge's source node, laid out.
+     * @param {Object} target - The edge's target node, laid out.
+     * @returns {string} An SVG path.
+     */
+    function edgePath(source, target) {
+      const sx = source.x;
+      const sy = source.y + source.boxH / 2;
+      const tx = target.x;
+      const ty = target.y - target.boxH / 2;
+
+      if (target.y > source.y) {
+        return d3.linkVertical().x((p) => p.x).y((p) => p.y)({
+          source: { x: sx, y: sy },
+          target: { x: tx, y: ty },
+        });
+      }
+
+      const bow = Math.max(source.boxW, target.boxW) / 2 + 46;
+      const bx = Math.max(sx, tx) + bow;
+      return (
+        `M${sx},${source.y} ` +
+        `C ${bx},${source.y} ${bx},${target.y} ${tx},${target.y}`
+      );
+    }
+
+    linkLayer
+      .selectAll("path.cfg-link")
+      .data(edges)
+      .enter()
+      .append("path")
+      .attr("class", (d) => `cfg-link cfg-link-${edgeRole(d.label)}`)
+      .attr("marker-end", (d) => `url(#cfg-arrow-${edgeRole(d.label)})`)
+      .attr("d", (d) => edgePath(byId.get(d.source), byId.get(d.target)));
+
+    labelLayer
+      .selectAll("text.cfg-edge-label")
+      .data(edges.filter((d) => d.label))
+      .enter()
+      .append("text")
+      .attr("class", (d) => `cfg-edge-label cfg-edge-label-${edgeRole(d.label)}`)
+      .attr("text-anchor", "middle")
+      .attr("dy", "0.32em")
+      .attr("x", (d) => (byId.get(d.source).x + byId.get(d.target).x) / 2)
+      .attr("y", (d) => (byId.get(d.source).y + byId.get(d.target).y) / 2)
+      .text((d) => d.label);
+
+    const node = nodeLayer
+      .selectAll("g.cfg-node")
+      .data(nodes)
+      .enter()
+      .append("g")
+      .attr("class", "cfg-node")
+      .classed("is-exit", (d) => !(d.successors && d.successors.length))
+      .attr("transform", (d) => `translate(${d.x},${d.y})`);
+
+    node
+      .append("rect")
+      .attr("class", "cfg-node-rect")
+      .attr("rx", 5)
+      .attr("ry", 5)
+      .attr("width", (d) => d.boxW)
+      .attr("height", (d) => d.boxH)
+      .attr("x", (d) => -d.boxW / 2)
+      .attr("y", (d) => -d.boxH / 2);
+
+    node
+      .append("text")
+      .attr("class", "cfg-node-head")
+      .attr("text-anchor", "middle")
+      .attr("x", 0)
+      .attr("y", (d) => -d.boxH / 2 + 14)
+      .text((d) => fitText(`${d.id}  ${d.function || ""}`, classFont(), d.boxW - PAD_X * 2));
+
+    node
+      .append("line")
+      .attr("class", "cfg-node-rule")
+      .attr("x1", (d) => -d.boxW / 2 + 6)
+      .attr("x2", (d) => d.boxW / 2 - 6)
+      .attr("y1", (d) => -d.boxH / 2 + CFG_HEAD_H - 4)
+      .attr("y2", (d) => -d.boxH / 2 + CFG_HEAD_H - 4);
+
+    node.each(function drawLines(d) {
+      const group = d3.select(this);
+      d.lines.forEach((line, i) => {
+        group
+          .append("text")
+          .attr("class", "cfg-node-line")
+          .attr("text-anchor", "middle")
+          .attr("x", 0)
+          .attr("y", -d.boxH / 2 + CFG_HEAD_H + 4 + i * CFG_LINE_H)
+          .text(fitText(line, cfgLineFont(), d.boxW - PAD_X * 2));
+      });
+    });
+
+    node.append("title").text((d) => (d.instructions || []).map((i) => i.text).join("\n"));
+
+    // --- fit the whole graph in view ---------------------------------------
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    nodes.forEach((d) => {
+      if (d.x - d.boxW / 2 < minX) minX = d.x - d.boxW / 2;
+      if (d.x + d.boxW / 2 > maxX) maxX = d.x + d.boxW / 2;
+      if (d.y - d.boxH / 2 < minY) minY = d.y - d.boxH / 2;
+      if (d.y + d.boxH / 2 > maxY) maxY = d.y + d.boxH / 2;
+    });
+
+    /**
+     * Frame the whole graph in the viewport, fit to its real bounding box.
+     * @returns {void}
+     */
+    function resetView() {
+      const margin = 48;
+      const spanX = Math.max(1, maxX - minX + margin * 2);
+      const spanY = Math.max(1, maxY - minY + margin * 2);
+      const scale = Math.max(0.1, Math.min(1.1, Math.min(width / spanX, height / spanY)));
+      svg.call(
+        zoom.transform,
+        d3.zoomIdentity
+          .translate(width / 2 - (scale * (minX + maxX)) / 2, height / 2 - (scale * (minY + maxY)) / 2)
+          .scale(scale)
+      );
+    }
+
+    resetView();
+    return { resetView: resetView };
+  }
+
   return {
     isAvailable: isAvailable,
     clear: clear,
     placeholder: placeholder,
     measure: measure,
     renderTree: renderTree,
+    renderCfg: renderCfg,
   };
 })();
 

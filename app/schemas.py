@@ -147,6 +147,9 @@ class BasicBlock(ApiModel):
     leader: int = Field(ge=0, description="Index of the leader instruction.")
     instructions: list[TacInstruction] = Field(default_factory=list)
     successors: list[str] = Field(default_factory=list, description="IDs of successor blocks.")
+    function: str | None = Field(
+        default=None, description="Name of the function this block belongs to."
+    )
 
 
 class CfgEdge(ApiModel):

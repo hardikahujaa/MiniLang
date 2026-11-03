@@ -257,10 +257,10 @@ class TestTabTooltips:
             ("lexical", "run Build"),
             ("syntax", "run Build"),
             ("theory", "Tier B"),
-            ("semantic", "step 4"),
-            ("icg", "step 5"),
-            ("optimization", "step 6"),
-            ("target", "step 7"),
+            ("semantic", "run Build"),
+            ("icg", "run Build"),
+            ("optimization", "run Build"),
+            ("target", "run Build"),
         ],
     )
     def test_tooltip_names_the_right_milestone(self, tab: str, fragment: str):

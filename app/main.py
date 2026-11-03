@@ -17,8 +17,8 @@ Build status
 ------------
 ``/compile`` runs every phase listed in :data:`IMPLEMENTED_PHASES` and leaves
 the rest of the response at its empty default, so an unbuilt phase renders as
-an empty tab rather than breaking the page. ``/run`` and ``/analyze-grammar``
-are still stubs, awaiting ``app/vm.py`` and ``app/grammar.py``.
+an empty tab rather than breaking the page. ``/analyze-grammar`` is still a
+stub, awaiting ``app/grammar.py`` (Tier B).
 """
 
 from __future__ import annotations
@@ -36,8 +36,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.ast_nodes import Program
+from app.codegen import generate as generate_asm
 from app.lexer import tokenize
 from app.logging_config import configure_logging, get_logger
+from app.optimize import optimize
 from app.parser import ParseError, parse
 from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR, DEMO_PROGRAM
 from app.schemas import (
@@ -47,11 +49,15 @@ from app.schemas import (
     GrammarRequest,
     GrammarResponse,
     HealthResponse,
+    OptimizationToggles,
     PhaseTiming,
     RunRequest,
     RunResponse,
 )
 from app.semantic import analyse
+from app.tac import generate as generate_tac
+from app.vm import find_entry
+from app.vm import run as run_vm
 
 logger = get_logger(__name__)
 
@@ -64,7 +70,7 @@ INDEX_HTML: Final[Path] = STATIC_DIR / "index.html"
 #: Compilation phases that are fully implemented. Each step of the build adds
 #: one entry here, and ``GET /api/health`` reports it, which gives the frontend
 #: (and the marker) an honest picture of what is wired up.
-IMPLEMENTED_PHASES: Final[list[str]] = ["lexer", "parser", "semantic"]
+IMPLEMENTED_PHASES: Final[list[str]] = ["lexer", "parser", "semantic", "tac", "optimize", "codegen"]
 
 
 @asynccontextmanager
@@ -286,6 +292,45 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
             response.meta.ok = False
         response.meta.timings.append(PhaseTiming(phase="semantic", ms=round(semantic_ms, 3)))
 
+    # --- Phase 4: intermediate code generation --------------------------
+    # Runs even when semantic analysis found type errors: every expression
+    # still carries a type (UNKNOWN where checking failed), so translation
+    # cannot raise on an ill-typed program, and showing the TAC for a program
+    # with a type error is still useful.
+    if program is not None:
+        tac_started = time.perf_counter()
+        tac_result = generate_tac(program)
+        tac_ms = (time.perf_counter() - tac_started) * 1000.0
+
+        response.tac = tac_result.instructions
+        response.blocks = tac_result.blocks
+        response.cfg = tac_result.cfg
+        response.meta.reached_phase = "tac"
+        response.meta.timings.append(PhaseTiming(phase="tac", ms=round(tac_ms, 3)))
+
+        # --- Phase 5: optimisation --------------------------------------
+        # Runs on the raw (pre-API) instruction list TacResult kept around
+        # for exactly this purpose, so optimise() can mutate freely rather
+        # than re-parsing the wire format it would otherwise be handed.
+        opt_started = time.perf_counter()
+        response.optimized = optimize(
+            tac_result.code, tac_result.function_bounds, request.optimizations
+        )
+        opt_ms = (time.perf_counter() - opt_started) * 1000.0
+        response.meta.reached_phase = "optimize"
+        response.meta.timings.append(PhaseTiming(phase="optimize", ms=round(opt_ms, 3)))
+
+        # --- Phase 6: target code generation ----------------------------
+        # Runs on the optimised TAC, so the Target tab's assembly reflects
+        # whichever passes the Optimization tab's toggles actually ran.
+        codegen_started = time.perf_counter()
+        asm_result = generate_asm(response.optimized.tac, tac_result.function_params)
+        codegen_ms = (time.perf_counter() - codegen_started) * 1000.0
+
+        response.asm = asm_result.asm
+        response.meta.reached_phase = "codegen"
+        response.meta.timings.append(PhaseTiming(phase="codegen", ms=round(codegen_ms, 3)))
+
     # Serialised only once every phase that annotates the tree has run. The
     # semantic analyser writes `inferred_type` onto the expression nodes in
     # place, so a dictionary taken right after parsing would carry none of the
@@ -308,6 +353,11 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
             "functions": function_count,
             "symbols": len(response.symbols),
             "type_errors": len(response.type_errors),
+            "tac_instructions": len(response.tac),
+            "basic_blocks": len(response.blocks),
+            "instructions_after_optimization": response.optimized.stats.instructions_after,
+            "instructions_removed": response.optimized.stats.removed,
+            "asm_instructions": len(response.asm),
             "total_errors": len(response.errors),
             "optimizations": request.optimizations.model_dump(),
         },
@@ -319,8 +369,15 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
 async def run_program(request: RunRequest) -> RunResponse:
     """Execute stack-VM assembly and capture its output.
 
-    **Scaffold stub.** Returns an empty result until ``app/vm.py`` lands in
-    step 7 of Tier A.
+    Two ways to call this, matching the two fields on
+    :class:`~app.schemas.RunRequest`: with ``asm`` (the normal path -- the
+    frontend sends back exactly the assembly a prior ``/compile`` returned,
+    so Run executes what Build actually produced, not a silent recompile of
+    whatever the editor holds now), or with ``source`` (a one-shot
+    compile-and-run convenience for API callers who have not called
+    ``/compile`` first). ``main``'s entry address is never separate state to
+    keep in sync with either: it is recovered from the assembly itself by
+    :func:`app.vm.find_entry`.
 
     Args:
         request: Either pre-generated assembly, or source to compile and run,
@@ -330,11 +387,40 @@ async def run_program(request: RunRequest) -> RunResponse:
         A :class:`~app.schemas.RunResponse` with captured stdout and the number
         of instructions retired.
     """
+    if request.source is not None:
+        lex_result = tokenize(request.source)
+        try:
+            program = parse(lex_result.tokens)
+        except ParseError as exc:
+            return RunResponse(output="", steps=0, halted=False, error=exc.to_api().message)
+
+        analyse(program)
+        tac_result = generate_tac(program)
+        optimized = optimize(tac_result.code, tac_result.function_bounds, OptimizationToggles())
+        asm_result = generate_asm(optimized.tac, tac_result.function_params)
+        asm = asm_result.asm
+        entry = asm_result.entry
+        main_param_count = len(tac_result.function_params.get("main", []))
+    else:
+        asm = request.asm
+        entry = find_entry(asm, "main")
+        main_param_count = 0
+
+    result = run_vm(asm, entry, max_steps=request.max_steps, main_param_count=main_param_count)
+
     logger.info(
         "run",
-        extra={"asm_len": len(request.asm), "has_source": request.source is not None},
+        extra={
+            "asm_len": len(asm),
+            "has_source": request.source is not None,
+            "steps": result.steps,
+            "halted": result.halted,
+            "error": result.error,
+        },
     )
-    return RunResponse(output="", steps=0, halted=True)
+    return RunResponse(
+        output=result.output, steps=result.steps, halted=result.halted, error=result.error
+    )
 
 
 # ---------------------------------------------------------------------------

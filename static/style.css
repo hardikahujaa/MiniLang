@@ -611,6 +611,208 @@ ul { margin: 0; padding: 0; list-style: none; }
 .sym-kind.kind-parameter { color: var(--violet); }
 .sym-kind.kind-variable  { color: var(--fg-muted); }
 
+/* ------------------- 9c. TAC / CFG (ICG tab) ------------------------------ */
+.seg-toggle { display: flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.seg-btn {
+  height: 25px;
+  padding: 0 11px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.seg-btn:first-child { border-left: 0; }
+.seg-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.seg-btn.is-active { background: var(--accent-deep); color: #fff; }
+
+.icg-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* --- TAC listing, grouped by basic block --- */
+.tac-block {
+  margin: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.tac-block-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  font: 11.5px var(--mono);
+}
+.tac-block-id { color: var(--accent); font-weight: 600; }
+.tac-block-fn { color: var(--violet); }
+.tac-block-succ { margin-left: auto; color: var(--fg-faint); }
+
+.tac-block-body { padding: 2px 0; }
+.tac-row {
+  display: flex;
+  gap: 12px;
+  padding: 1px 12px;
+  font: 12px var(--mono);
+  white-space: pre;
+}
+.tac-row:hover { background: var(--bg-hover); }
+.tac-idx { flex: 0 0 auto; width: 28px; color: var(--fg-faint); text-align: right; }
+.tac-text { color: var(--fg-muted); }
+.tac-text.is-label { color: var(--syn-type); font-weight: 600; }
+.tac-text.is-jump { color: var(--syn-keyword); }
+.tac-text.is-return { color: var(--err); }
+.tac-text.is-call { color: var(--syn-func); }
+.tac-text.is-print { color: var(--syn-string); }
+
+/* --- control-flow graph --- */
+.cfg-svg { display: block; }
+
+.cfg-link { fill: none; stroke-width: 1.6px; }
+.cfg-link-ok     { stroke: var(--ok); }
+.cfg-link-err    { stroke: var(--err); }
+.cfg-link-faint  { stroke: var(--fg-faint); }
+.cfg-link-accent { stroke: var(--accent); }
+
+.cfg-edge-label {
+  font: 600 10px var(--mono);
+  paint-order: stroke;
+  stroke: var(--bg-editor);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+  user-select: none;
+}
+.cfg-edge-label-ok     { fill: var(--ok); }
+.cfg-edge-label-err    { fill: var(--err); }
+.cfg-edge-label-faint  { fill: var(--fg-faint); }
+.cfg-edge-label-accent { fill: var(--accent); }
+
+.cfg-node-rect {
+  fill: var(--bg-raised);
+  stroke: var(--accent);
+  stroke-width: 1.3px;
+}
+.cfg-node.is-exit .cfg-node-rect { stroke: var(--err); }
+
+.cfg-node-head {
+  font: 600 11.5px var(--mono);
+  fill: var(--fg);
+  pointer-events: none;
+  user-select: none;
+}
+.cfg-node-rule { stroke: var(--border); stroke-width: 1px; }
+.cfg-node-line {
+  font: 11px var(--mono);
+  fill: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ------------------- 9d. Optimization tab -------------------------------- */
+.opt-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.opt-columns {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.opt-col {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+.opt-col:last-child { border-right: 0; }
+
+.opt-col-head {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  font: 600 11.5px var(--mono);
+  color: var(--fg-muted);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.opt-col-count { margin-left: 6px; color: var(--fg-faint); font-weight: 400; text-transform: none; }
+
+.opt-col-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+.opt-log-pane {
+  flex: 0 0 auto;
+  max-height: 34%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+.opt-log-head {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  font: 600 11px var(--mono);
+  color: var(--fg-muted);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.opt-log-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+.opt-log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+}
+.opt-log-row:hover { background: var(--bg-hover); }
+
+.opt-log-pass {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font: 10px var(--mono);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  background: var(--bg-raised);
+}
+.opt-log-pass.pass-constant-folding                  { color: var(--syn-number); }
+.opt-log-pass.pass-constant-propagation               { color: var(--accent); }
+.opt-log-pass.pass-common-subexpression-elimination   { color: var(--violet); }
+.opt-log-pass.pass-dead-code-elimination              { color: var(--err); }
+
+.opt-log-change { flex: 1 1 auto; min-width: 0; color: var(--fg-muted); font: 12px var(--mono); }
+.opt-log-change code { color: var(--fg); }
+.opt-log-removed { color: var(--err); font-style: italic; }
+.opt-log-detail { flex: 0 1 auto; color: var(--fg-faint); font-size: 11px; white-space: nowrap; }
+
+/* ------------------- 9e. Target tab (assembly + Run) ---------------------- */
+.asm-comment { color: var(--fg-faint); font-style: italic; }
+
+.asm-run-status {
+  font: 11.5px var(--mono);
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--fg-faint);
+}
+.asm-run-status.is-ok    { color: var(--ok); }
+.asm-run-status.is-warn  { color: var(--warn); }
+.asm-run-status.is-error { color: var(--err); }
+
 /* --------------------------- 10. Output pane ----------------------------- */
 .outputpane {
   height: var(--output-h);
