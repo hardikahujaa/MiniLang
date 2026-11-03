@@ -437,7 +437,8 @@ Enforced throughout, not retrofitted at the end:
 | A | 5. TAC + basic blocks + CFG | done |
 | A | 6. Constant folding, propagation, DCE + toggles | done |
 | A | 7. Codegen + stack VM + Run | done |
-| B | 8-13. Parser theory lab, step animation, error recovery, benchmark | |
+| B | 8a. Parser theory *backend* (`app/grammar.py`): FIRST/FOLLOW, LL(1), LR(0)/SLR/LALR tables, conflict detection | done |
+| B | 8b-13. Parser Theory Lab UI, `/analyze-grammar` wiring, step animation, error recovery, benchmark | |
 | C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
 
 ## A.6 Operational notes
@@ -587,3 +588,50 @@ docstrings; this is the short version.
   rather than keeping it as separate state that could drift out of sync.
   Editing the source after a build and pressing Run without rebuilding
   therefore runs the last build, matching the button's own disabled state.
+
+## A.10 Tier B step 8a (grammar theory backend): decisions made during the build
+
+`app/grammar.py` carries the full rationale in its own module docstring;
+this is the short version.
+
+* **It never calls, and is never called by, the real parser.** `app/parser.py`
+  is hand-written recursive descent on purpose (its own docstring explains
+  why); this module is the opposite -- nothing but the classical table
+  constructions, built mechanically from whatever grammar text a user
+  pastes. The two are deliberately independent, exactly as section 1 of the
+  plan scoped Tier A and Tier B apart from the start.
+* **LALR(1) is built by constructing the full canonical LR(1) collection and
+  merging states with the same core, not by the more efficient lookahead-
+  propagation algorithm (section 4.7.4).** The grammars this tool analyses
+  are small, hand-written course examples, so the canonical collection is
+  never large enough for the efficiency difference to matter, and building
+  it the simple way keeps every intermediate LR(1) item set available to
+  show on the tab later and to check in a test -- a by-product the faster
+  algorithm doesn't produce. The book states this merge is always sound and
+  explicitly allows it as a valid, if less space-efficient, construction.
+* **A real bug surfaced and got fixed before the tests that would have hidden
+  it were written: `|` as an alternative separator collided with a grammar
+  whose own alphabet includes a token spelled `||`.** Splitting the raw RHS
+  text on the character `|` tore `||` in half around an invisible empty
+  alternative, silently producing three spurious epsilon productions where
+  one was meant. The fix tokenizes on whitespace first and only treats a
+  *standalone* `|` token as a separator. `TestGrammarParsing
+  ::test_pipe_shaped_terminal_is_not_split_by_the_alternative_separator` in
+  `tests/test_grammar.py` pins this, and it is what let a reformulated,
+  LL(1)-shaped version of MiniLang's own expression grammar -- which uses
+  `||` for its own logical-or -- be checked against this module at all.
+* **A production with many alternatives may wrap across lines, as long as
+  every continuation line starts with `|`.** This surfaced the same way the
+  bug above did: the first version of this module's own test suite tried to
+  write exactly this and failed, because a natural way to format a grammar
+  by hand is not automatically the way a one-production-per-line parser
+  expects it.
+* **Every result is checked against the book, not just against itself.**
+  `tests/test_grammar.py` pins FIRST, FOLLOW and LL(1) table cells for the
+  book's own non-left-recursive expression grammar (section 4.4); the LR(0)
+  canonical collection's size (12 states) for `app.samples.DEMO_GRAMMAR`,
+  the book's own running SLR example (Figure 4.31); and, as the strongest
+  single test in the file, that the book's own canonical "SLR fails, LALR
+  succeeds" grammar (`S -> L = R | R`, section 4.7.3) reproduces exactly
+  that distinction here -- a real shift-reduce conflict from `build_slr_table`,
+  none from `build_lalr_table`, on the same grammar.
