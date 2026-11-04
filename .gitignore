@@ -34,6 +34,9 @@ cache/*
 # ---- Node (report generation scripts only use this) ----
 node_modules/
 
+# ---- Generated benchmark output (regenerate with `python benchmark.py`) ----
+results.csv
+
 # ---- Editors / OS ----
 .vscode/
 .idea/

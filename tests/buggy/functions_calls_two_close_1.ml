@@ -1,0 +1,17 @@
+func factorial(int n): int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+func add(int a, int b): int {
+    return a + b;
+}
+
+func main(): void {
+    bool p
+    bool q
+    print(factorial(5));
+    print(add(factorial(3), factorial(4)));
+}

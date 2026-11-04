@@ -324,6 +324,21 @@ class RecoveringParser(Parser):
         ``;``) gets discarded, one token at a time, until a synchronizing
         token or the end of input is reached.
 
+        Brace-depth aware: an error raised while parsing a construct's own
+        header -- an ``if``/``while`` condition, most often -- leaves an
+        unmatched ``{`` sitting in the remaining input, the one that was
+        about to open that construct's body. Treating every ``}`` as a
+        synchronizing token regardless of depth would let the discard walk
+        straight through that unmatched ``{`` and stop on the *body's own*
+        closing ``}`` (or a keyword inside the body that merely looks like a
+        fresh statement start), handing control back one nesting level
+        shallower than where the error actually happened -- silently
+        dropping the rest of that body and corrupting everything after it.
+        A local depth counter, incremented on ``{`` and decremented on
+        ``}``, restricts the synchronizing-token check to depth 0: a brace
+        opened during the discard must be closed again by the discard
+        itself before anything is treated as a resumption point.
+
         Termination: every branch below either returns immediately or
         discards at least one real token before the loop can run again, so
         this cannot loop forever -- checked directly, for both the
@@ -338,12 +353,21 @@ class RecoveringParser(Parser):
         if self._check_any(_STATEMENT_SYNC):
             return
 
+        depth = 0
+        if self._check(TokenType.LBRACE):
+            depth += 1
+        elif self._check(TokenType.RBRACE):
+            depth -= 1
         self._advance()
-        while (
-            not self._is_at_end()
-            and not self._check(TokenType.SEMICOLON)
-            and not self._check_any(_STATEMENT_SYNC)
-        ):
+        while not self._is_at_end():
+            if depth == 0 and (
+                self._check(TokenType.SEMICOLON) or self._check_any(_STATEMENT_SYNC)
+            ):
+                break
+            if self._check(TokenType.LBRACE):
+                depth += 1
+            elif self._check(TokenType.RBRACE):
+                depth -= 1
             self._advance()
         if self._check(TokenType.SEMICOLON):
             self._advance()

@@ -1,0 +1,392 @@
+[
+  {
+    "file": "control_flow_assign_for_eq.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "assign_for_eq",
+        "line": 2,
+        "description": "expected ')' in if condition, but found '='"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_missing_colon.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_colon_before_return_type",
+        "line": 1,
+        "description": "expected ':' in function return type, but found 'int'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_missing_semi.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 4,
+        "description": "expected ';' in return statement, but found '}'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_missing_type_keyword.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_type_keyword",
+        "line": 1,
+        "description": "expected 'bool' or 'float' or 'int' or 'void' in parameter, but found 'x'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_misspelled_keyword.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "misspelled_keyword",
+        "line": 1,
+        "description": "expected 'func' in function declaration, but found 'fun'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_two_close_1.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 15,
+        "description": "expected ';' in variable declaration, but found 'bool'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 16,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_two_close_2.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 20,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 21,
+        "description": "expected ';' in variable declaration, but found '}'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_two_far_1.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 15,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 20,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_two_far_2.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 15,
+        "description": "expected ';' in variable declaration, but found 'while'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 20,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "control_flow_unbalanced_bracket.ml",
+    "source_program": "control_flow.ml",
+    "seeded_errors": [
+      {
+        "category": "unbalanced_bracket",
+        "line": 19,
+        "description": "expected '}' in block, but found end of file"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_assign_for_eq.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "assign_for_eq",
+        "line": 2,
+        "description": "expected ')' in if condition, but found '='"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_missing_colon.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_colon_before_return_type",
+        "line": 1,
+        "description": "expected ':' in function return type, but found 'int'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_missing_semi.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 4,
+        "description": "expected ';' in return statement, but found '}'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_missing_type_keyword.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_type_keyword",
+        "line": 8,
+        "description": "expected 'bool' or 'float' or 'int' or 'void' in parameter, but found 'b'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_misspelled_keyword.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "misspelled_keyword",
+        "line": 1,
+        "description": "expected 'func' in function declaration, but found 'fun'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_two_close_1.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 14,
+        "description": "expected ';' in variable declaration, but found 'bool'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 15,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_two_close_2.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 16,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 17,
+        "description": "expected ';' in variable declaration, but found '}'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_two_far_1.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 14,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 19,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_two_far_2.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 14,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 17,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "functions_calls_unbalanced_bracket.ml",
+    "source_program": "functions_calls.ml",
+    "seeded_errors": [
+      {
+        "category": "unbalanced_bracket",
+        "line": 15,
+        "description": "expected '}' in block, but found end of file"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_assign_for_eq.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "assign_for_eq",
+        "line": 7,
+        "description": "expected ')' in if condition, but found '='"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_missing_colon.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_colon_before_return_type",
+        "line": 1,
+        "description": "expected ':' in function return type, but found 'int'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_missing_semi.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 3,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_missing_type_keyword.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_type_keyword",
+        "line": 1,
+        "description": "expected 'bool' or 'float' or 'int' or 'void' in parameter, but found 'cols'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_misspelled_keyword.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "misspelled_keyword",
+        "line": 1,
+        "description": "expected 'func' in function declaration, but found 'fun'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_two_close_1.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 19,
+        "description": "expected ';' in variable declaration, but found 'bool'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 20,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_two_close_2.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 20,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 21,
+        "description": "expected ';' in variable declaration, but found '}'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_two_far_1.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 3,
+        "description": "expected ';' in variable declaration, but found 'int'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 22,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_two_far_2.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "missing_semicolon",
+        "line": 6,
+        "description": "expected ';' in variable declaration, but found 'while'"
+      },
+      {
+        "category": "missing_semicolon",
+        "line": 19,
+        "description": "expected ';' in variable declaration, but found 'print'"
+      }
+    ]
+  },
+  {
+    "file": "nested_blocks_unbalanced_bracket.ml",
+    "source_program": "nested_blocks.ml",
+    "seeded_errors": [
+      {
+        "category": "unbalanced_bracket",
+        "line": 19,
+        "description": "expected '}' in block, but found end of file"
+      }
+    ]
+  }
+]
