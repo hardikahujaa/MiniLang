@@ -39,6 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.ast_nodes import Program
 from app.codegen import generate as generate_asm
+from app.errors import recover_parse
 from app.grammar import Automaton, GrammarAnalysis, GrammarError, LrTable, trace_lr_parse
 from app.grammar import analyse as analyse_grammar
 from app.lexer import tokenize
@@ -317,6 +318,18 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
     except ParseError as exc:
         response.errors.append(exc.to_api())
         response.meta.ok = False
+        # Tier B item 10: recover past the first error too, so the Problems
+        # panel can show every genuine mistake -- each already carrying
+        # ranked repair suggestions -- instead of only the one Baseline A
+        # reports. Only replaces that single entry when recovery actually
+        # found more than one; a program with exactly one syntax error
+        # keeps the plain Baseline A report, unchanged from before this
+        # existed. `recovery.program` is deliberately not used for anything
+        # downstream -- Baseline A stays the pipeline's sole source for the
+        # AST, semantic analysis, TAC and codegen.
+        recovery = recover_parse(lex_result.tokens)
+        if len(recovery.reports) > 1:
+            response.errors = recovery.reports
     else:
         response.meta.reached_phase = "parser"
         function_count = len(program.functions)

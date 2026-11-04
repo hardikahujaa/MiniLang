@@ -411,6 +411,22 @@ class TestSyntaxAnalysis:
         assert response.status_code == 200
         assert any("too deep" in e["message"] for e in response.json()["errors"])
 
+    def test_a_single_syntax_error_keeps_the_plain_baseline_a_report(self, client: TestClient):
+        """One real mistake must not trigger the recovery-engine report shape."""
+        body = client.post("/compile", json={"source": "func m(): void { int x = 5 }"}).json()
+        assert len(body["errors"]) == 1
+        assert body["errors"][0]["recovered"] is False
+
+    def test_multiple_syntax_errors_all_come_back_ranked(self, client: TestClient):
+        """More than one genuine mistake surfaces all of them, pre-ranked."""
+        source = "func m(): void {\n    int x = 1\n    int y = 2\n}"
+        body = client.post("/compile", json={"source": source}).json()
+        assert len(body["errors"]) == 2
+        for error in body["errors"]:
+            assert error["recovered"] is True
+            assert error["suggestion"] == "insert ';'"
+            assert error["suggestions"]
+
     def test_timings_include_the_parser_phase(self, client: TestClient, demo_source: str):
         timings = client.post("/compile", json={"source": demo_source}).json()["meta"]["timings"]
         phases = [t["phase"] for t in timings]

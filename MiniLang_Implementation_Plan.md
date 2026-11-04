@@ -440,7 +440,8 @@ Enforced throughout, not retrofitted at the end:
 | B | 8a. Parser theory *backend* (`app/grammar.py`): FIRST/FOLLOW, LL(1), LR(0)/SLR/LALR tables, conflict detection | done |
 | B | 8b. Parser Theory Lab UI + `/analyze-grammar` wiring: grammar textarea, FIRST/FOLLOW/LL(1)/LR(0)/SLR/LALR views, conflict list, LALR parse trace | done |
 | B | 9. Step-through parse animation (Syntax tab): `app/table_parser.py`, Play/Step/Reset UI | done |
-| B | 10-13. Error recovery, benchmark | |
+| B | 10. Syntax error recovery: `app/errors.py`, panic-mode + ranked suggestions, `/compile` wiring | done |
+| B | 11-13. Benchmark: seeded corpus, `benchmark.py` | |
 | C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
 
 ## A.6 Operational notes
@@ -731,3 +732,70 @@ this is the short version.
   `Viz.renderTree` already draws, and a new `setVisibleStep(stepIndex)`
   method on the tree handle reveals nodes by toggling a CSS class rather
   than re-laying out the tree on every Play/Step tick.
+
+## A.13 Tier B step 10 (syntax error recovery): decisions made during the build
+
+* **`app/parser.py` needed zero changes.** Every grammar-rule method calls
+  the next one through `self.`, never the class name directly, so
+  `RecoveringParser(Parser)` overriding only `_program` and `_block` --
+  the two methods with their own loop over a sequence of declarations or
+  statements -- transparently intercepts every call site inside the rest of
+  `Parser`, unmodified. A `ParseError` raised parsing something nested
+  inside an `if`/`while` body propagates to the *nearest* enclosing
+  `_block`'s overridden loop through ordinary exception propagation --
+  "resume at the enclosing statement boundary" needs no extra bookkeeping
+  at all, and happens correctly at whatever nesting depth the error
+  actually occurred at, not only at the top level.
+* **A real design flaw surfaced through testing, not inspection: panic-mode
+  skip originally discarded the first token unconditionally, before
+  checking whether the cursor was already sitting on a synchronizing
+  one.** That ate the leading token of whatever well-formed statement
+  happened to follow the error whenever the error token itself was already
+  a legitimate resync point (a type keyword, `}`, a second `;`) --
+  concretely, two independent missing-semicolon mistakes on consecutive
+  lines collapsed into a single reported error instead of two, because
+  recovering from the first swallowed the `int` that started the second.
+  Fixed to check before discarding: if already at `;` or a statement-start
+  token, nothing is discarded at all. Termination still holds -- re-argued
+  and tested directly, both for "already synchronized" and "discard at
+  least one genuine token" -- and the original two-error case now reports
+  both, pinned permanently in `tests/test_errors.py
+  ::TestRecoveryResumesCorrectly::test_two_independent_missing_semicolons_are_both_reported`.
+* **The ranking engine's common-mistake table is built from verified
+  `(expected, context, found)` triples read directly out of
+  `app/parser.py`, not guessed at.** The `=`/`==` confusion case is the
+  clearest example of why this mattered: parsing `if (x = 1)` never
+  produces an error with `==` anywhere in its expected set at all --
+  `=` is not a valid expression operator in MiniLang, so `x = 1` parses as
+  the complete expression `x`, and the *actual* error is "expected `)` in
+  if condition, but found `=`". The suggestion has to be injected as an
+  extra candidate keyed on `found.type is ASSIGN and context in
+  ("if condition", "while condition")`, not scored from `expected` the way
+  every other candidate is -- scoring `==` against an expected set that
+  never contains it would never find this case at all.
+* **A misspelled *keyword* only produces a direct, rankable token mismatch
+  when the position genuinely requires that exact keyword and nothing
+  else.** `whiel (x) {}` does not: MiniLang's grammar accepts a bare
+  identifier as a complete expression statement, so a misspelled `while`
+  parses as a call-shaped expression (`whiel(x)`) and the real error
+  surfaces several tokens later, at the `{` that follows, with no trace of
+  "while" in the picture. `func` typo'd as `fun` is the clean version of
+  this case: `_func_decl` consumes nothing before checking for `func`
+  specifically, so `fun` produces exactly `expected 'func' ..., found
+  'fun'` and ranks correctly. Both behaviours are pinned, not just the
+  convenient one.
+* **Baseline B (the benchmark's "naive resume" comparison point) is this
+  same engine with two constructor flags off** (`rank=False,
+  suppress=False`), not a second implementation -- `recover_parse`'s own
+  docstring states this is deliberate, since it is also what proves
+  ranking and suppression are genuinely separable improvements rather than
+  bundled together by construction.
+* **An edge case needed its own recovery path: an empty token stream.**
+  `Parser._program` raises before its loop even starts when there are no
+  functions at all, which a try/except around the loop body cannot catch.
+  `RecoveringParser._program` builds that same error with `self._error(...)`
+  (which returns rather than raises) and feeds it to the normal
+  `_record_and_recover` path directly, so `recover_parse("")` still comes
+  back with a `RecoveryResult` -- one report, an empty `Program` -- instead
+  of a raw exception escaping the one function whose entire purpose is to
+  never let that happen.
