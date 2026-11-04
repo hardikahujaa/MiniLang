@@ -53,6 +53,19 @@ let cfgHandle = null;
 /** Which ICG sub-view is showing: `"tac"` or `"cfg"`. */
 let icgView = "tac";
 
+/** The most recent successful `/analyze-grammar` response. */
+let lastTheory = null;
+
+/** Which Parser Theory sub-view is showing. */
+let theoryView = "sets";
+
+/** `app.samples.DEMO_GRAMMAR`, fetched once from `/api/demo` and reused by
+ *  the "Expression grammar" quick-load button and the sidebar file tree. */
+let demoGrammarText = "";
+
+/** `app.samples.AMBIGUOUS_GRAMMAR`, fetched once from `/api/demo`. */
+let ambiguousGrammarText = "";
+
 /* -------------------------------------------------------------------------
    DOM helpers
    ------------------------------------------------------------------------- */
@@ -228,6 +241,277 @@ function renderTokenWindow() {
       );
     })
     .join("");
+}
+
+/* -------------------------------------------------------------------------
+   Parser Theory Lab (Parser Theory tab)
+
+   A separate fetch from Build's: the grammar being analysed has nothing to
+   do with the MiniLang source in the editor, so this is its own request,
+   its own empty-state/wrap toggle, and its own stats row -- the same shape
+   `build()`/`renderResult()` use for the main pipeline, just independent of
+   it.
+   ------------------------------------------------------------------------- */
+
+/**
+ * Switch which Parser Theory sub-view is visible.
+ * @param {string} name - One of "sets", "ll1", "lr0", "slr", "lalr",
+ *     "conflicts", "trace".
+ * @returns {void}
+ */
+function activateTheoryView(name) {
+  theoryView = name;
+  $$('.seg-toggle[aria-label="Parser Theory view"] .seg-btn').forEach((btn) =>
+    btn.classList.toggle("is-active", btn.dataset.theoryView === name)
+  );
+  ["sets", "ll1", "lr0", "slr", "lalr", "conflicts", "trace"].forEach((view) => {
+    $(`#theory-view-${view}`).hidden = view !== name;
+  });
+}
+
+/**
+ * Render a `{symbol: [member, ...]}` map (FIRST or FOLLOW) as table rows.
+ * @param {Object<string, Array<string>>} sets - The map to render.
+ * @param {Array<string>} symbols - Which keys to show, in this order.
+ * @returns {string} HTML rows.
+ */
+function renderSetRows(sets, symbols) {
+  return symbols
+    .map((symbol) => {
+      const members = (sets[symbol] || []).map((m) => `<code>${esc(m)}</code>`).join(" ");
+      return (
+        "<tr>" +
+        `<td class="theory-symbol">${esc(symbol)}</td>` +
+        `<td>${members || "&mdash;"}</td>` +
+        "</tr>"
+      );
+    })
+    .join("");
+}
+
+/** Render the "Sets" view: grammar summary plus FIRST/FOLLOW tables. */
+function renderTheorySets(result) {
+  const productions = (result.productions || [])
+    .map((p, i) => `<li><span class="theory-prod-index">r${i + 1}</span><code>${esc(p)}</code></li>`)
+    .join("");
+
+  return (
+    '<div class="theory-summary">' +
+    `<div><span class="theory-label">Start symbol</span><code>${esc(result.startSymbol || "")}</code></div>` +
+    `<div><span class="theory-label">Terminals</span>${(result.terminals || [])
+      .map((t) => `<code>${esc(t)}</code>`)
+      .join(" ")}</div>` +
+    `<div><span class="theory-label">Non-terminals</span>${(result.nonTerminals || [])
+      .map((t) => `<code>${esc(t)}</code>`)
+      .join(" ")}</div>` +
+    "</div>" +
+    `<ol class="theory-productions">${productions}</ol>` +
+    '<table class="theory-table"><thead><tr><th>Symbol</th><th>FIRST</th></tr></thead>' +
+    `<tbody>${renderSetRows(result.first || {}, result.nonTerminals || [])}</tbody></table>` +
+    '<table class="theory-table"><thead><tr><th>Symbol</th><th>FOLLOW</th></tr></thead>' +
+    `<tbody>${renderSetRows(result.follow || {}, result.nonTerminals || [])}</tbody></table>`
+  );
+}
+
+/** Render the "LL(1)" view: the parsing table, with conflict cells flagged. */
+function renderTheoryLl1(result) {
+  const table = result.ll1Table || {};
+  const terminals = [...(result.terminals || []), "$"];
+  const nonTerminals = result.nonTerminals || [];
+
+  const header = terminals.map((t) => `<th>${esc(t)}</th>`).join("");
+  const rows = nonTerminals
+    .map((nt) => {
+      const cells = terminals
+        .map((t) => {
+          const entries = (table[nt] || {})[t] || [];
+          const isConflict = entries.length > 1;
+          const content = entries.map((e) => `<code>${esc(e)}</code>`).join("<br/>");
+          return `<td class="${isConflict ? "theory-conflict" : ""}">${content || "&nbsp;"}</td>`;
+        })
+        .join("");
+      return `<tr><td class="theory-symbol">${esc(nt)}</td>${cells}</tr>`;
+    })
+    .join("");
+
+  const banner = result.isLl1
+    ? '<div class="theory-banner theory-banner-ok">This grammar is LL(1).</div>'
+    : '<div class="theory-banner theory-banner-conflict">Not LL(1) &mdash; see the highlighted cells below.</div>';
+
+  return (
+    banner +
+    '<table class="theory-table theory-lr-table"><thead><tr><th></th>' +
+    `${header}</tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
+
+/** Render the "LR(0) Items" view: one card per canonical-collection state. */
+function renderTheoryLr0(result) {
+  return (result.lr0Items || [])
+    .map((state) => {
+      const items = (state.items || []).map((item) => `<li><code>${esc(item)}</code></li>`).join("");
+      const transitions = Object.entries(state.transitions || {})
+        .map(([symbol, target]) => `<span><code>${esc(symbol)}</code> &rarr; state ${target}</span>`)
+        .join("");
+      return (
+        '<div class="theory-state-card">' +
+        `<div class="theory-state-head">State ${state.state}</div>` +
+        `<ul class="theory-items">${items}</ul>` +
+        `<div class="theory-transitions">${transitions || "&mdash;"}</div>` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/**
+ * Render an SLR or LALR ACTION/GOTO table, merged into one grid per state.
+ * @param {Object} result - The `/analyze-grammar` response.
+ * @param {string} key - `"slrTable"` or `"lalrTable"`.
+ * @returns {string} HTML.
+ */
+function renderTheoryLrTable(result, key) {
+  const table = result[key] || {};
+  const terminals = [...(result.terminals || []), "$"];
+  const nonTerminals = result.nonTerminals || [];
+  const states = Object.keys(table)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  const header =
+    [...terminals, ...nonTerminals].map((s) => `<th>${esc(s)}</th>`).join("");
+  const rows = states
+    .map((state) => {
+      const row = table[String(state)] || {};
+      const cells = [...terminals, ...nonTerminals]
+        .map((symbol) => {
+          const entries = row[symbol] || [];
+          const isConflict = entries.length > 1;
+          const content = entries.join(" / ");
+          return `<td class="${isConflict ? "theory-conflict" : ""}">${content || "&nbsp;"}</td>`;
+        })
+        .join("");
+      return `<tr><td class="theory-symbol">${state}</td>${cells}</tr>`;
+    })
+    .join("");
+
+  return (
+    '<table class="theory-table theory-lr-table"><thead><tr><th>State</th>' +
+    `${header}</tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
+
+/** Render the "Conflicts" view: every LL(1)/SLR/LALR conflict, grouped by table. */
+function renderTheoryConflicts(result) {
+  const conflicts = result.conflicts || [];
+  if (conflicts.length === 0) {
+    return '<div class="out-empty">No conflicts in any of the three tables.</div>';
+  }
+  return conflicts
+    .map(
+      (c) =>
+        '<div class="theory-conflict-row">' +
+        `<span class="theory-conflict-table">${esc(c.table)}</span>` +
+        `<span class="theory-conflict-kind">${esc(c.kind)}</span>` +
+        `<span class="theory-conflict-detail">${esc(c.detail)}</span>` +
+        "</div>"
+    )
+    .join("");
+}
+
+/** Render the "Trace" view: the step-by-step LALR parse of the input string. */
+function renderTheoryTrace(result) {
+  const trace = result.parseTrace || [];
+  if (trace.length === 0) {
+    return '<div class="out-empty">Enter a trace input above and press Analyze.</div>';
+  }
+  const rows = trace
+    .map(
+      (step) =>
+        "<tr>" +
+        `<td>${step.step}</td>` +
+        `<td><code>${esc((step.stack || []).join(" "))}</code></td>` +
+        `<td><code>${esc((step.input || []).join(" "))}</code></td>` +
+        `<td>${esc(step.action)}</td>` +
+        "</tr>"
+    )
+    .join("");
+  return (
+    '<table class="theory-table"><thead><tr><th>Step</th><th>Stack</th>' +
+    `<th>Input</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
+
+/**
+ * Render the whole Parser Theory tab from an `/analyze-grammar` response.
+ * @param {Object} result - The response body.
+ * @returns {void}
+ */
+function renderTheory(result) {
+  lastTheory = result;
+  $("#theory-empty").hidden = true;
+  $("#theory-wrap").hidden = false;
+
+  const errors = result.errors || [];
+  $("#theory-errors").hidden = errors.length === 0;
+  $("#theory-errors").innerHTML = errors.map((e) => esc(e.message)).join("<br/>");
+
+  const parts = [
+    `<span><b>${(result.nonTerminals || []).length}</b> non-terminals</span>`,
+    `<span><b>${(result.terminals || []).length}</b> terminals</span>`,
+    `<span><b>${(result.lr0Items || []).length}</b> LR(0) states</span>`,
+    `<span>LL(1): <b>${result.isLl1 ? "yes" : "no"}</b></span>`,
+    `<span><b>${(result.conflicts || []).length}</b> conflicts</span>`,
+  ];
+  $("#theory-stats").innerHTML = parts.join("");
+
+  $("#theory-view-sets").innerHTML = renderTheorySets(result);
+  $("#theory-view-ll1").innerHTML = renderTheoryLl1(result);
+  $("#theory-view-lr0").innerHTML = renderTheoryLr0(result);
+  $("#theory-view-slr").innerHTML = renderTheoryLrTable(result, "slrTable");
+  $("#theory-view-lalr").innerHTML = renderTheoryLrTable(result, "lalrTable");
+  $("#theory-view-conflicts").innerHTML = renderTheoryConflicts(result);
+  $("#theory-view-trace").innerHTML = renderTheoryTrace(result);
+}
+
+/**
+ * Submit the Parser Theory tab's grammar text to `/analyze-grammar`.
+ * @returns {Promise<void>} Resolves once the response has been rendered.
+ */
+async function analyzeGrammar() {
+  const grammar = $("#theory-grammar-input").value;
+  if (!grammar.trim()) {
+    setStatus("error", "Paste a grammar first");
+    return;
+  }
+  const startSymbol = $("#theory-start-symbol").value.trim() || null;
+  const inputString = $("#theory-input-string").value.trim() || null;
+
+  setStatus("working", "Analysing grammar…");
+  try {
+    const response = await fetch("/analyze-grammar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grammar, startSymbol, inputString }),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      setStatus("error", `Analysis failed — HTTP ${response.status}`);
+      log(`HTTP ${response.status}: ${detail.slice(0, 400)}`);
+      return;
+    }
+    const result = await response.json();
+    renderTheory(result);
+    const errorCount = (result.errors || []).length;
+    setStatus(errorCount ? "error" : "ready", errorCount ? "Grammar has errors" : "Analysis complete");
+    log(
+      `analyze-grammar: ${(result.nonTerminals || []).length} non-terminals, ` +
+        `${(result.conflicts || []).length} conflict(s)`
+    );
+  } catch (err) {
+    setStatus("error", "Backend unreachable");
+    log(`fetch failed: ${err.message}`);
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -923,6 +1207,11 @@ async function loadDemo() {
     const data = await response.json();
     editor.setValue(data.source);
     setLanguage("minilang");
+    demoGrammarText = data.grammar || "";
+    ambiguousGrammarText = data.ambiguousGrammar || "";
+    if ($("#theory-grammar-input") && !$("#theory-grammar-input").value) {
+      $("#theory-grammar-input").value = demoGrammarText;
+    }
     log("loaded demo.ml");
     setStatus("ready", "Ready — press Build");
   } catch (err) {
@@ -1159,6 +1448,20 @@ function init() {
   $$("#icg-toolbar .seg-btn").forEach((btn) =>
     btn.addEventListener("click", () => activateIcgView(btn.dataset.icgView))
   );
+  $$('.seg-toggle[aria-label="Parser Theory view"] .seg-btn').forEach((btn) =>
+    btn.addEventListener("click", () => activateTheoryView(btn.dataset.theoryView))
+  );
+  $("#btn-theory-analyze").addEventListener("click", analyzeGrammar);
+  $("#btn-theory-load-expr").addEventListener("click", () => {
+    $("#theory-grammar-input").value = demoGrammarText;
+    $("#theory-start-symbol").value = "";
+    analyzeGrammar();
+  });
+  $("#btn-theory-load-ambiguous").addEventListener("click", () => {
+    $("#theory-grammar-input").value = ambiguousGrammarText;
+    $("#theory-start-symbol").value = "";
+    analyzeGrammar();
+  });
   $$("#opt-toggles input[data-opt]").forEach((input) =>
     input.addEventListener("change", () => {
       if (lastResult) build();
@@ -1183,8 +1486,15 @@ function init() {
       file.classList.add("is-active");
       if (file.dataset.open === "demo") loadDemo();
       if (file.dataset.open === "scratch") editor.setValue("");
-      if (file.dataset.open === "grammar" || file.dataset.open === "ambiguous") {
+      if (file.dataset.open === "grammar") {
         activateTab("theory");
+        $("#theory-grammar-input").value = demoGrammarText;
+        analyzeGrammar();
+      }
+      if (file.dataset.open === "ambiguous") {
+        activateTab("theory");
+        $("#theory-grammar-input").value = ambiguousGrammarText;
+        analyzeGrammar();
       }
     })
   );

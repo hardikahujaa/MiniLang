@@ -256,7 +256,7 @@ class TestTabTooltips:
         [
             ("lexical", "run Build"),
             ("syntax", "run Build"),
-            ("theory", "Tier B"),
+            ("theory", "press Analyze"),
             ("semantic", "run Build"),
             ("icg", "run Build"),
             ("optimization", "run Build"),
@@ -264,7 +264,11 @@ class TestTabTooltips:
         ],
     )
     def test_tooltip_names_the_right_milestone(self, tab: str, fragment: str):
-        """A built tab says 'run Build'; an unbuilt one names the step that fills it."""
+        """A built tab names the action that fills it.
+
+        'run Build' for the six tabs Build populates, 'press Analyze' for
+        the Parser Theory tab, which has its own independent action.
+        """
         match = re.search(rf'data-tab="{tab}" title="([^"]+)"', INDEX_HTML)
         assert match, f"no tooltip for tab {tab}"
         assert fragment in match.group(1)

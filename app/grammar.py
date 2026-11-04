@@ -70,7 +70,7 @@ same way it reports any other conflict.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -1075,59 +1075,157 @@ def build_lalr_table(
 # ---------------------------------------------------------------------------
 
 
-def run_lr_parse(table: LrTable, tokens: Sequence[str]) -> bool:
-    """Drive an SLR(1)/LALR(1) ACTION/GOTO table over a token string.
+@dataclass(frozen=True)
+class LrParseStep:
+    """One step of a table-driven LR parse, for display or inspection.
+
+    Attributes:
+        step: 0-based index of this step.
+        stack: The parser's stack *before* this step's action is applied,
+            bottom first, alternating state and grammar symbol exactly as
+            the book draws an LR parse trace -- e.g. ``("0", "id", "5")``
+            is the start state, the terminal just shifted, and the state
+            reached by shifting it.
+        input: The input symbols not yet consumed, including the trailing
+            end-marker.
+        action: What this step does: ``"shift '<symbol>', goto state N"``,
+            ``"reduce by <production>"``, ``"accept"``, or an
+            ``"error: ..."`` description of why the parse cannot continue.
+    """
+
+    step: int
+    stack: tuple[str, ...]
+    input: tuple[str, ...]
+    action: str
+
+
+def _step_lr_parse(table: LrTable, tokens: Sequence[str]) -> Iterator[LrParseStep]:
+    """Shared driver behind :func:`run_lr_parse` and :func:`trace_lr_parse`.
 
     This is "a model of an LR parser" (Algorithm 4.7): a state stack
     starting at state 0, repeatedly shifting the next input symbol and a new
     state, or reducing by popping as many states as the chosen production's
     right-hand side is long and pushing the GOTO of the state beneath that
     on the production's left-hand side, until either an accept action is
-    reached (success) or no action applies (failure).
+    reached or no action applies. Keeping this one generator as the only
+    place that logic is written is what guarantees :func:`run_lr_parse`'s
+    boolean verdict and :func:`trace_lr_parse`'s full step list can never
+    silently disagree with each other.
 
     Args:
         table: The table to drive, from :func:`build_slr_table` or
             :func:`build_lalr_table`.
-        tokens: The input string's terminals, without a trailing ``$`` --
-            one is appended here.
+        tokens: The input string's terminals, without a trailing ``$``.
 
-    Returns:
-        ``True`` if the input is accepted, ``False`` on any error. A cell
-        with a recorded conflict uses its first action, since this driver
-        exists to check unambiguous tables, not to resolve conflicts.
+    Yields:
+        One :class:`LrParseStep` per action taken. The last one yielded has
+        ``action == "accept"`` on success, or an ``action`` starting with
+        ``"error:"`` otherwise. A cell with a recorded conflict uses its
+        first action, since this driver exists to check unambiguous tables,
+        not to resolve conflicts.
     """
     input_symbols = [*tokens, END_MARKER]
     state_stack: list[int] = [0]
+    symbol_stack: list[str] = []
     position = 0
-    steps = 0
+    step = 0
     max_steps = 10_000
 
-    while steps < max_steps:
-        steps += 1
+    def current_stack() -> tuple[str, ...]:
+        parts: list[str] = [str(state_stack[0])]
+        for symbol, state in zip(symbol_stack, state_stack[1:], strict=True):
+            parts.append(symbol)
+            parts.append(str(state))
+        return tuple(parts)
+
+    while step < max_steps:
+        remaining = tuple(input_symbols[position:])
         state = state_stack[-1]
         lookahead = input_symbols[position]
         actions = table.action.get((state, lookahead))
+
         if not actions:
-            return False
+            yield LrParseStep(
+                step,
+                current_stack(),
+                remaining,
+                f"error: no action for '{lookahead}' in state {state}",
+            )
+            return
         chosen = actions[0]
 
         if chosen.kind == "accept":
-            return True
+            yield LrParseStep(step, current_stack(), remaining, "accept")
+            return
+
         if chosen.kind == "shift":
+            yield LrParseStep(
+                step, current_stack(), remaining, f"shift '{lookahead}', goto state {chosen.target}"
+            )
+            symbol_stack.append(lookahead)
             state_stack.append(chosen.target)  # type: ignore[arg-type]
             position += 1
+            step += 1
             continue
 
         production = chosen.production
         assert production is not None  # a "reduce" action always carries one
+        yield LrParseStep(step, current_stack(), remaining, f"reduce by {production}")
         for _ in range(len(production.rhs)):
             state_stack.pop()
+            symbol_stack.pop()
         goto_state = table.goto.get((state_stack[-1], production.lhs))
         if goto_state is None:
-            return False
+            yield LrParseStep(
+                step + 1,
+                current_stack(),
+                remaining,
+                f"error: no goto for {production.lhs} in state {state_stack[-1]}",
+            )
+            return
+        symbol_stack.append(production.lhs)
         state_stack.append(goto_state)
+        step += 1
 
-    return False
+    yield LrParseStep(
+        step, current_stack(), tuple(input_symbols[position:]), "error: exceeded maximum steps"
+    )
+
+
+def run_lr_parse(table: LrTable, tokens: Sequence[str]) -> bool:
+    """Drive an SLR(1)/LALR(1) ACTION/GOTO table over a token string.
+
+    Args:
+        table: The table to drive, from :func:`build_slr_table` or
+            :func:`build_lalr_table`.
+        tokens: The input string's terminals, without a trailing ``$``.
+
+    Returns:
+        ``True`` if the input is accepted, ``False`` on any error.
+    """
+    last_action = ""
+    for recorded_step in _step_lr_parse(table, tokens):
+        last_action = recorded_step.action
+    return last_action == "accept"
+
+
+def trace_lr_parse(table: LrTable, tokens: Sequence[str]) -> tuple[LrParseStep, ...]:
+    """Drive a table exactly as :func:`run_lr_parse` does, keeping every step.
+
+    This is what :attr:`app.schemas.GrammarRequest.input_string` is for: the
+    Parser Theory Lab's step-through display of stack, remaining input, and
+    action at every point in the parse -- the same "moves of an LR parser"
+    trace table the book draws by hand (section 4.6.1, Figure 4.33).
+
+    Args:
+        table: The table to drive, from :func:`build_slr_table` or
+            :func:`build_lalr_table`.
+        tokens: The input string's terminals, without a trailing ``$``.
+
+    Returns:
+        Every step taken, in order.
+    """
+    return tuple(_step_lr_parse(table, tokens))
 
 
 # ---------------------------------------------------------------------------

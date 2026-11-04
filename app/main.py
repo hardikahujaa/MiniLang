@@ -17,8 +17,10 @@ Build status
 ------------
 ``/compile`` runs every phase listed in :data:`IMPLEMENTED_PHASES` and leaves
 the rest of the response at its empty default, so an unbuilt phase renders as
-an empty tab rather than breaking the page. ``/analyze-grammar`` is still a
-stub, awaiting ``app/grammar.py`` (Tier B).
+an empty tab rather than breaking the page. ``/analyze-grammar`` is fully
+wired to :mod:`app.grammar` (Tier B step 8): FIRST/FOLLOW, LL(1), LR(0),
+SLR(1) and LALR(1) tables, conflicts, and an LALR parse trace when the
+request includes an input string.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -37,6 +39,8 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.ast_nodes import Program
 from app.codegen import generate as generate_asm
+from app.grammar import Automaton, GrammarAnalysis, GrammarError, LrTable, trace_lr_parse
+from app.grammar import analyse as analyse_grammar
 from app.lexer import tokenize
 from app.logging_config import configure_logging, get_logger
 from app.optimize import optimize
@@ -46,10 +50,13 @@ from app.schemas import (
     CompileMeta,
     CompileRequest,
     CompileResponse,
+    Diagnostic,
+    GrammarConflict,
     GrammarRequest,
     GrammarResponse,
     HealthResponse,
     OptimizationToggles,
+    ParseStep,
     PhaseTiming,
     RunRequest,
     RunResponse,
@@ -426,15 +433,202 @@ async def run_program(request: RunRequest) -> RunResponse:
 # ---------------------------------------------------------------------------
 # Parser Theory Lab
 # ---------------------------------------------------------------------------
+#
+# Everything below adapts app.grammar's textbook-pure result types (which
+# know nothing about JSON or pydantic, on purpose -- see that module's own
+# docstring) into the wire shapes app.schemas.GrammarResponse promises. The
+# algorithms themselves are proven correct against the book in
+# tests/test_grammar.py; what is adapted here is purely presentation, so the
+# tests for this layer check that the JSON shape round-trips correctly, not
+# that the numbers are right -- that was already settled.
+
+
+def _action_cell(actions: tuple[Any, ...]) -> list[str]:
+    """Render one ACTION cell's actions as the book's own shorthand.
+
+    Args:
+        actions: Every action recorded for one (state, terminal) cell --
+            normally one; more than one is a conflict, rendered as every
+            action so a conflicted cell visibly shows what collided.
+
+    Returns:
+        ``["s5"]`` for a shift to state 5, ``["r2"]`` for a reduce by
+        production 2, ``["acc"]`` for accept, or more than one entry for a
+        conflict (e.g. ``["s6", "r2"]``).
+    """
+    rendered: list[str] = []
+    for action in actions:
+        if action.kind == "shift":
+            rendered.append(f"s{action.target}")
+        elif action.kind == "accept":
+            rendered.append("acc")
+        else:
+            assert action.production is not None  # a reduce action always carries one
+            rendered.append(f"r{action.production.index}")
+    return rendered
+
+
+def _lr_table_to_api(table: LrTable) -> dict[str, dict[str, list[str]]]:
+    """Reshape an :class:`~app.grammar.LrTable` into the API's table shape.
+
+    Args:
+        table: An SLR(1) or LALR(1) table from :mod:`app.grammar`.
+
+    Returns:
+        ``{state: {symbol: [action, ...]}}``, merging ACTION (terminal
+        columns, shown as ``s``/``r``/``acc`` shorthand) and GOTO
+        (nonterminal columns, shown as the bare target state number) into
+        one table per state, exactly as the book draws them side by side.
+    """
+    rows: dict[str, dict[str, list[str]]] = {}
+    for (state, symbol), actions in table.action.items():
+        rows.setdefault(str(state), {})[symbol] = _action_cell(actions)
+    for (state, symbol), target in table.goto.items():
+        rows.setdefault(str(state), {})[symbol] = [str(target)]
+    return rows
+
+
+def _lr0_items_to_api(automaton: Automaton) -> list[dict[str, Any]]:
+    """Render an LR automaton's states as the "canonical collection" display.
+
+    Args:
+        automaton: An LR(0) or merged-LALR automaton from :mod:`app.grammar`.
+
+    Returns:
+        One entry per state: its index, its items rendered as
+        ``"A -> α . β"`` strings, and its outgoing transitions keyed by
+        symbol (a terminal's transition is a shift, a nonterminal's is a
+        goto -- the frontend already knows which is which).
+    """
+    result: list[dict[str, Any]] = []
+    for lr_state in automaton.states:
+        transitions = {
+            symbol: target
+            for (state_index, symbol), target in automaton.transitions.items()
+            if state_index == lr_state.index
+        }
+        result.append(
+            {
+                "state": lr_state.index,
+                "items": sorted(str(item) for item in lr_state.items),
+                "transitions": transitions,
+            }
+        )
+    return result
+
+
+def _ll1_table_to_api(analysis: GrammarAnalysis) -> dict[str, dict[str, list[str]]]:
+    """Reshape the LL(1) table into ``{nonterminal: {terminal: [production]}}``.
+
+    A cell with more than one production in its list is a conflict -- the
+    table itself carries that information, so the frontend does not need a
+    separate lookup into :attr:`GrammarAnalysis.ll1`'s conflict list just to
+    know which cells to flag.
+
+    Args:
+        analysis: The full grammar analysis.
+
+    Returns:
+        The reshaped table.
+    """
+    rows: dict[str, dict[str, list[str]]] = {}
+    for (nonterminal, terminal), productions in analysis.ll1.table.items():
+        rows.setdefault(nonterminal, {})[terminal] = [str(p) for p in productions]
+    return rows
+
+
+def _conflicts_to_api(analysis: GrammarAnalysis) -> list[GrammarConflict]:
+    """Collect every conflict from all three table constructions.
+
+    Args:
+        analysis: The full grammar analysis.
+
+    Returns:
+        Every LL(1), SLR(1) and LALR(1) conflict, each tagged with which
+        table it came from -- the distinction that matters most here, since
+        a grammar can have an SLR conflict an LALR table resolves (and the
+        whole reason this project builds both).
+    """
+    return [
+        GrammarConflict(
+            table=table_name, kind=c.kind, state=c.state, symbol=c.symbol, detail=c.detail
+        )
+        for table_name, conflicts in (
+            ("ll1", analysis.ll1.conflicts),
+            ("slr", analysis.slr.conflicts),
+            ("lalr", analysis.lalr.conflicts),
+        )
+        for c in conflicts
+    ]
+
+
+def _parse_trace_to_api(table: LrTable, input_string: str | None) -> list[ParseStep]:
+    """Trace ``input_string`` through ``table``, if one was given.
+
+    Always traced on the LALR(1) table rather than SLR(1): LALR is proven
+    (``TestSlrGrammarsAreAlwaysLalr`` in ``tests/test_grammar.py``) to accept
+    everything SLR does and sometimes more, so it is the table least likely
+    to reject input the grammar's author actually meant to be valid.
+
+    Args:
+        table: The LALR(1) table to drive.
+        input_string: Whitespace-separated terminals, or ``None``/empty for
+            no trace.
+
+    Returns:
+        The step-by-step trace, or an empty list if no input was given.
+    """
+    if not input_string or not input_string.strip():
+        return []
+    steps = trace_lr_parse(table, input_string.split())
+    return [
+        ParseStep(step=s.step, stack=list(s.stack), input=list(s.input), action=s.action)
+        for s in steps
+    ]
+
+
+def _grammar_analysis_to_response(
+    analysis: GrammarAnalysis, input_string: str | None
+) -> GrammarResponse:
+    """Adapt a full :class:`~app.grammar.GrammarAnalysis` into the API shape.
+
+    Args:
+        analysis: The result of :func:`app.grammar.analyse`.
+        input_string: The request's optional parse-trace input.
+
+    Returns:
+        The populated response.
+    """
+    grammar = analysis.grammar
+    return GrammarResponse(
+        terminals=sorted(grammar.terminals),
+        non_terminals=sorted(grammar.nonterminals),
+        start_symbol=grammar.start_symbol,
+        productions=[str(p) for p in grammar.productions],
+        first={symbol: sorted(values) for symbol, values in analysis.first.items()},
+        follow={symbol: sorted(values) for symbol, values in analysis.follow.items()},
+        ll1_table=_ll1_table_to_api(analysis),
+        is_ll1=analysis.ll1.is_ll1,
+        lr0_items=_lr0_items_to_api(analysis.lr0),
+        slr_table=_lr_table_to_api(analysis.slr),
+        lalr_table=_lr_table_to_api(analysis.lalr),
+        conflicts=_conflicts_to_api(analysis),
+        parse_trace=_parse_trace_to_api(analysis.lalr, input_string),
+        errors=[],
+    )
 
 
 @app.post("/analyze-grammar", response_model=GrammarResponse, tags=["theory"])
 async def analyze_grammar(request: GrammarRequest) -> GrammarResponse:
     """Analyse an arbitrary context-free grammar for the Parser Theory Lab.
 
-    **Scaffold stub.** Returns an empty analysis until ``app/grammar.py`` lands
-    in Tier B, where it computes FIRST/FOLLOW sets, the LL(1) table, the LR(0)
-    canonical collection, SLR and LALR tables, and flags conflicts.
+    Runs every construction in :mod:`app.grammar` -- FIRST/FOLLOW, the LL(1)
+    table, the LR(0) canonical collection, and the SLR(1) and LALR(1) tables
+    -- over whatever grammar text was submitted, not just MiniLang's own. A
+    grammar that fails to parse (a missing arrow, an unresolvable start
+    symbol, and so on) is reported as a single error diagnostic rather than
+    a 500, so a mid-typing paste in the Parser Theory tab degrades to an
+    empty-but-valid response instead of breaking the page.
 
     Args:
         request: The grammar text, an optional start symbol, and an optional
@@ -443,14 +637,27 @@ async def analyze_grammar(request: GrammarRequest) -> GrammarResponse:
     Returns:
         A :class:`~app.schemas.GrammarResponse` holding the computed tables.
     """
+    try:
+        analysis = analyse_grammar(request.grammar, request.start_symbol)
+    except GrammarError as exc:
+        logger.info("analyze-grammar", extra={"ok": False, "error": str(exc)})
+        return GrammarResponse(
+            errors=[Diagnostic(message=str(exc), severity="error", phase="grammar")]
+        )
+
+    response = _grammar_analysis_to_response(analysis, request.input_string)
     logger.info(
         "analyze-grammar",
         extra={
-            "grammar_lines": len(request.grammar.splitlines()),
-            "start_symbol": request.start_symbol,
+            "ok": True,
+            "start_symbol": response.start_symbol,
+            "is_ll1": response.is_ll1,
+            "lr0_states": len(response.lr0_items),
+            "conflicts": len(response.conflicts),
+            "traced_steps": len(response.parse_trace),
         },
     )
-    return GrammarResponse(start_symbol=request.start_symbol)
+    return response
 
 
 # Mounted last so the API routes above take precedence over static paths.

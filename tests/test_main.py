@@ -230,7 +230,16 @@ class TestRunEndpoint:
 
 
 class TestGrammarEndpoint:
-    """``POST /analyze-grammar`` -- the Parser Theory Lab."""
+    """``POST /analyze-grammar`` -- the Parser Theory Lab.
+
+    These are deliberately thin: every number the Parser Theory Lab produces
+    is already pinned against the textbook in ``tests/test_grammar.py``, so
+    what matters here is only that this HTTP layer carries those numbers
+    through correctly -- the right JSON shape, the right status code for a
+    bad grammar, and the one genuinely new piece of logic this layer adds
+    (picking LALR over SLR for the parse trace, merging three tables' worth
+    of conflicts into one list tagged by table).
+    """
 
     def test_accepts_a_grammar(self, client: TestClient):
         response = client.post(
@@ -240,13 +249,75 @@ class TestGrammarEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["startSymbol"] == "E"
+        assert body["terminals"] == ["+", "id"]
+        assert body["nonTerminals"] == ["E", "T"]
+        assert body["productions"] == ["E -> E + T", "E -> T", "T -> id"]
         for key in ("first", "follow", "ll1Table", "slrTable", "lalrTable", "conflicts"):
             assert key in body, f"missing analysis field: {key}"
 
-    def test_start_symbol_is_optional(self, client: TestClient):
+    def test_start_symbol_defaults_to_first_productions_left_hand_side(self, client: TestClient):
+        # Not an echo of the request: when none is given, the response
+        # reports the start symbol app.grammar actually resolved and
+        # analysed against, which is what the tab needs to display.
         response = client.post("/analyze-grammar", json={"grammar": "S -> a"})
         assert response.status_code == 200
-        assert response.json()["startSymbol"] is None
+        assert response.json()["startSymbol"] == "S"
+
+    def test_demo_grammar_is_slr_and_lalr_conflict_free(self, client: TestClient):
+        from app.samples import DEMO_GRAMMAR
+
+        body = client.post("/analyze-grammar", json={"grammar": DEMO_GRAMMAR}).json()
+        assert body["isLl1"] is False  # left-recursive, so it does have LL(1) conflicts
+        tables_with_conflicts = {c["table"] for c in body["conflicts"]}
+        assert tables_with_conflicts == {"ll1"}  # SLR and LALR are both clean
+        assert len(body["lr0Items"]) == 12  # Aho et al. Figure 4.31
+
+    def test_ambiguous_grammar_reports_shift_reduce_conflicts(self, client: TestClient):
+        from app.samples import AMBIGUOUS_GRAMMAR
+
+        body = client.post("/analyze-grammar", json={"grammar": AMBIGUOUS_GRAMMAR}).json()
+        lr_conflicts = [c for c in body["conflicts"] if c["table"] in ("slr", "lalr")]
+        assert lr_conflicts
+        assert all(c["kind"] == "shift-reduce" for c in lr_conflicts)
+
+    def test_assignment_grammar_conflicts_only_under_slr_not_lalr(self, client: TestClient):
+        # The book's own canonical example of a grammar that is LALR(1) but
+        # not SLR(1) (section 4.7.3) -- the whole reason this project builds
+        # both tables rather than just one.
+        grammar = "S -> L = R | R\nL -> * R | id\nR -> L\n"
+        body = client.post("/analyze-grammar", json={"grammar": grammar, "startSymbol": "S"}).json()
+        tables_with_conflicts = {c["table"] for c in body["conflicts"]}
+        assert "slr" in tables_with_conflicts
+        assert "lalr" not in tables_with_conflicts
+
+    def test_input_string_produces_a_parse_trace(self, client: TestClient):
+        from app.samples import DEMO_GRAMMAR
+
+        body = client.post(
+            "/analyze-grammar",
+            json={"grammar": DEMO_GRAMMAR, "inputString": "id + id"},
+        ).json()
+        trace = body["parseTrace"]
+        assert trace, "expected a non-empty parse trace"
+        assert trace[0]["step"] == 0
+        assert trace[-1]["action"] == "accept"
+
+    def test_no_input_string_means_no_trace(self, client: TestClient):
+        from app.samples import DEMO_GRAMMAR
+
+        body = client.post("/analyze-grammar", json={"grammar": DEMO_GRAMMAR}).json()
+        assert body["parseTrace"] == []
+
+    def test_unparsable_grammar_is_a_diagnostic_not_a_500(self, client: TestClient):
+        response = client.post("/analyze-grammar", json={"grammar": "not a grammar at all"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["errors"]
+        assert body["errors"][0]["severity"] == "error"
+        assert body["errors"][0]["phase"] == "grammar"
+        # Nothing downstream was computed for ungradable input.
+        assert body["productions"] == []
+        assert body["conflicts"] == []
 
     @pytest.mark.parametrize(
         ("payload", "reason"),

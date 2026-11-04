@@ -41,6 +41,7 @@ from app.grammar import (
     goto0,
     parse_grammar,
     run_lr_parse,
+    trace_lr_parse,
 )
 from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR
 
@@ -406,6 +407,59 @@ class TestSlrGrammarsAreAlwaysLalr:
         analysis = analyse(grammar_text)
         if analysis.slr.is_conflict_free:
             assert analysis.lalr.is_conflict_free
+
+
+# ---------------------------------------------------------------------------
+# The parse-trace driver (section 4.6.1's "moves of an LR parser")
+# ---------------------------------------------------------------------------
+
+
+class TestTraceLrParse:
+    def test_agrees_with_run_lr_parse_on_acceptance(self) -> None:
+        # Both functions share one internal stepping routine specifically so
+        # they cannot disagree; this pins that invariant from the outside.
+        analysis = analyse(DEMO_GRAMMAR)
+        for sentence in ["id + id * id", "( id + id ) * id", "id id", "( id"]:
+            tokens = sentence.split()
+            trace = trace_lr_parse(analysis.slr, tokens)
+            accepted = trace[-1].action == "accept"
+            assert accepted == run_lr_parse(analysis.slr, tokens)
+
+    def test_accepted_trace_ends_in_accept_with_only_the_end_marker_left(self) -> None:
+        analysis = analyse(DEMO_GRAMMAR)
+        trace = trace_lr_parse(analysis.slr, ["id", "+", "id"])
+        assert trace[-1].action == "accept"
+        assert trace[-1].input == ("$",)
+
+    def test_rejected_trace_ends_in_an_error(self) -> None:
+        analysis = analyse(DEMO_GRAMMAR)
+        trace = trace_lr_parse(analysis.slr, ["id", "id"])
+        assert trace[-1].action.startswith("error:")
+
+    def test_step_numbers_are_sequential_from_zero(self) -> None:
+        analysis = analyse(DEMO_GRAMMAR)
+        trace = trace_lr_parse(analysis.slr, ["id", "+", "id", "*", "id"])
+        assert [s.step for s in trace] == list(range(len(trace)))
+
+    def test_stack_grows_by_one_state_and_symbol_per_shift(self) -> None:
+        # The very first step, before anything has been shifted, must show
+        # only the start state with no symbol above it.
+        analysis = analyse(DEMO_GRAMMAR)
+        trace = trace_lr_parse(analysis.slr, ["id"])
+        assert trace[0].stack == ("0",)
+
+    def test_matches_the_books_own_trace_shape_for_id_plus_id_times_id(self) -> None:
+        # A direct transcription of the shape of the book's own worked trace
+        # for this exact sentence (section 4.6.1): every one of the five
+        # input symbols (id + id * id) is shifted exactly once, interleaved
+        # with eight reductions, ending cleanly on accept.
+        analysis = analyse(DEMO_GRAMMAR)
+        trace = trace_lr_parse(analysis.slr, ["id", "+", "id", "*", "id"])
+        actions = [s.action for s in trace]
+        assert actions[0].startswith("shift 'id'")
+        assert actions[-1] == "accept"
+        assert sum(a.startswith("shift") for a in actions) == 5  # one per input symbol
+        assert sum(a.startswith("reduce") for a in actions) == 8
 
 
 # ---------------------------------------------------------------------------

@@ -107,7 +107,7 @@
       <button class="tab" role="tab" data-tab="lexical" title="Token stream - run Build to populate" aria-selected="false">
         <span class="tab-num">2</span>Lexical
       </button>
-      <button class="tab" role="tab" data-tab="theory" title="Arrives in Tier B - paste any grammar for FIRST/FOLLOW, SLR and LALR tables" aria-selected="false">
+      <button class="tab" role="tab" data-tab="theory" title="Paste any grammar, press Analyze - FIRST/FOLLOW, LL(1), LR(0), SLR and LALR tables" aria-selected="false">
         <span class="tab-num">3</span>Parser Theory
       </button>
       <button class="tab" role="tab" data-tab="syntax" title="Parse tree - run Build to populate" aria-selected="false">
@@ -173,11 +173,64 @@
 
       <!-- ======================= 3. PARSER THEORY ====================== -->
       <section class="panel" id="panel-theory" role="tabpanel">
-        <div class="empty-state" data-step="Tier B &middot; step 8">
+        <div class="pane-toolbar theory-toolbar">
+          <label class="field theory-field-grammar">
+            <span class="field-label">Grammar</span>
+            <textarea id="theory-grammar-input" class="theory-textarea" rows="4"
+                      spellcheck="false"
+                      placeholder="E -> E + T | T&#10;T -> T * F | F&#10;F -> ( E ) | id"></textarea>
+          </label>
+          <div class="theory-row">
+            <label class="field theory-field-start">
+              <span class="field-label">Start symbol</span>
+              <input type="text" id="theory-start-symbol" class="input input-sm" placeholder="auto" />
+            </label>
+            <label class="field theory-field-input">
+              <span class="field-label">Trace input</span>
+              <input type="text" id="theory-input-string" class="input input-sm" placeholder="id + id * id" />
+            </label>
+            <button id="btn-theory-analyze" class="btn btn-primary" type="button">Analyze</button>
+            <button id="btn-theory-load-expr" class="btn" type="button"
+                    title="Load the classic expression grammar (left-recursive: SLR, not LL(1))">
+              Expression grammar
+            </button>
+            <button id="btn-theory-load-ambiguous" class="btn" type="button"
+                    title="Load a deliberately ambiguous grammar: watch the conflicts light up">
+              Ambiguous grammar
+            </button>
+          </div>
+        </div>
+
+        <div class="empty-state" id="theory-empty" data-step="Tier B &middot; step 8">
           <p>Paste any grammar &rarr; FIRST/FOLLOW, LL(1), LR(0), SLR and LALR tables,
              with conflicts highlighted.</p>
         </div>
-        <div id="theory-wrap" hidden></div>
+
+        <div id="theory-wrap" hidden>
+          <div class="pane-toolbar">
+            <div class="stat-row" id="theory-stats"></div>
+            <div class="toolbar-spacer"></div>
+            <div class="seg-toggle" role="tablist" aria-label="Parser Theory view">
+              <button class="seg-btn is-active" type="button" data-theory-view="sets">Sets</button>
+              <button class="seg-btn" type="button" data-theory-view="ll1">LL(1)</button>
+              <button class="seg-btn" type="button" data-theory-view="lr0">LR(0) Items</button>
+              <button class="seg-btn" type="button" data-theory-view="slr">SLR</button>
+              <button class="seg-btn" type="button" data-theory-view="lalr">LALR</button>
+              <button class="seg-btn" type="button" data-theory-view="conflicts">Conflicts</button>
+              <button class="seg-btn" type="button" data-theory-view="trace">Trace</button>
+            </div>
+          </div>
+
+          <div id="theory-errors" class="theory-errors" hidden></div>
+
+          <div id="theory-view-sets" class="theory-view"></div>
+          <div id="theory-view-ll1" class="theory-view" hidden></div>
+          <div id="theory-view-lr0" class="theory-view" hidden></div>
+          <div id="theory-view-slr" class="theory-view" hidden></div>
+          <div id="theory-view-lalr" class="theory-view" hidden></div>
+          <div id="theory-view-conflicts" class="theory-view" hidden></div>
+          <div id="theory-view-trace" class="theory-view" hidden></div>
+        </div>
       </section>
 
       <!-- ========================== 4. SYNTAX ========================== -->

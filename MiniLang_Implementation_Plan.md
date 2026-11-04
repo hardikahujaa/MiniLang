@@ -438,7 +438,8 @@ Enforced throughout, not retrofitted at the end:
 | A | 6. Constant folding, propagation, DCE + toggles | done |
 | A | 7. Codegen + stack VM + Run | done |
 | B | 8a. Parser theory *backend* (`app/grammar.py`): FIRST/FOLLOW, LL(1), LR(0)/SLR/LALR tables, conflict detection | done |
-| B | 8b-13. Parser Theory Lab UI, `/analyze-grammar` wiring, step animation, error recovery, benchmark | |
+| B | 8b. Parser Theory Lab UI + `/analyze-grammar` wiring: grammar textarea, FIRST/FOLLOW/LL(1)/LR(0)/SLR/LALR views, conflict list, LALR parse trace | done |
+| B | 9-13. Step-through parse animation (Syntax tab), error recovery, benchmark | |
 | C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
 
 ## A.6 Operational notes
@@ -635,3 +636,44 @@ this is the short version.
   succeeds" grammar (`S -> L = R | R`, section 4.7.3) reproduces exactly
   that distinction here -- a real shift-reduce conflict from `build_slr_table`,
   none from `build_lalr_table`, on the same grammar.
+
+## A.11 Tier B step 8b (Parser Theory Lab UI + `/analyze-grammar`): decisions made during the build
+
+* **`app/grammar.py` stays textbook-pure; `app/main.py` owns every bit of
+  JSON adaptation.** The same split `app/vm.py`/`app/main.py` already use
+  for `/run` (`VmResult` is a plain dataclass, `RunResponse` is assembled in
+  the route). A set of private `_*_to_api` functions in `main.py` reshape
+  `GrammarAnalysis` into `GrammarResponse` -- FIRST/FOLLOW as sorted lists,
+  the LL(1)/SLR/LALR tables as `{state: {symbol: [action, ...]}}` using the
+  book's own `s5`/`r2`/`acc` shorthand, LR(0) item sets as one entry per
+  state. Nothing about table correctness lives in this layer, so its own
+  tests check the JSON shape and round-tripping, not the numbers -- those
+  were already pinned in `tests/test_grammar.py`.
+* **`GrammarConflict` gained a `table: Literal["ll1","slr","lalr"]` field,
+  and `kind` now also accepts `"ll1"`.** Mirrors `app.grammar.Conflict`
+  exactly. Without it, a single merged conflicts list could not show the one
+  thing this whole feature exists to demonstrate: a grammar whose SLR table
+  has a conflict that its LALR table does not.
+* **`run_lr_parse` and the new `trace_lr_parse` share one internal stepping
+  generator (`_step_lr_parse`), added without changing `run_lr_parse`'s own
+  signature or behaviour.** `trace_lr_parse` records every
+  `LrParseStep` -- stack, remaining input, action -- in the interleaved
+  state/symbol form the book draws by hand (Figure 4.33); `run_lr_parse`
+  just reduces the same sequence to whether the last step was `"accept"`.
+  Sharing the loop is what guarantees the two can never quietly disagree.
+* **The parse trace always runs on the LALR table, never SLR**, because
+  `TestSlrGrammarsAreAlwaysLalr` already proves LALR accepts everything SLR
+  does and sometimes more -- so it is the table least likely to reject input
+  the grammar's own author meant to be valid.
+* **A malformed grammar paste is a `Diagnostic` in the response, not an HTTP
+  500.** The Parser Theory tab's grammar textarea is meant to be typed into
+  live, and a syntactically incomplete grammar mid-keystroke is the normal
+  case, not an exceptional one.
+* **Two stub-era tests in `TestGrammarEndpoint` were updated, not treated as
+  fixed requirements.** One asserted `startSymbol` echoes the request
+  (`null` when omitted) -- correct for an empty stub, wrong for a working
+  analyser, which should report the symbol it actually resolved and
+  analysed against (`"S"`, the first production's left-hand side). Updating
+  a test to match newly-correct behaviour is the same judgement call every
+  earlier Tier A step's integration made when a phase went from stub to
+  real.

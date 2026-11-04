@@ -380,9 +380,10 @@ class GrammarRequest(ApiModel):
 
 
 class GrammarConflict(ApiModel):
-    """A shift/reduce or reduce/reduce conflict found while building a table."""
+    """A conflict found while building one of the three parsing tables."""
 
-    kind: Literal["shift-reduce", "reduce-reduce"]
+    table: Literal["ll1", "slr", "lalr"]
+    kind: Literal["ll1", "shift-reduce", "reduce-reduce"]
     state: int | None = None
     symbol: str | None = None
     detail: str = ""
