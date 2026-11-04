@@ -439,7 +439,8 @@ Enforced throughout, not retrofitted at the end:
 | A | 7. Codegen + stack VM + Run | done |
 | B | 8a. Parser theory *backend* (`app/grammar.py`): FIRST/FOLLOW, LL(1), LR(0)/SLR/LALR tables, conflict detection | done |
 | B | 8b. Parser Theory Lab UI + `/analyze-grammar` wiring: grammar textarea, FIRST/FOLLOW/LL(1)/LR(0)/SLR/LALR views, conflict list, LALR parse trace | done |
-| B | 9-13. Step-through parse animation (Syntax tab), error recovery, benchmark | |
+| B | 9. Step-through parse animation (Syntax tab): `app/table_parser.py`, Play/Step/Reset UI | done |
+| B | 10-13. Error recovery, benchmark | |
 | C | Multi-language lexing, regex->NFA->DFA, CSE, LLM layer | |
 
 ## A.6 Operational notes
@@ -677,3 +678,56 @@ this is the short version.
   a test to match newly-correct behaviour is the same judgement call every
   earlier Tier A step's integration made when a phase went from stub to
   real.
+
+## A.12 Tier B step 9 (step-through parse animation): decisions made during the build
+
+* **MiniLang's grammar needed a second textbook transformation before a
+  table-driven parser could touch it, beyond the left-recursion elimination
+  Report 1 already describes.** `app/parser.py`'s own `_statement` docstring
+  states plainly that distinguishing `assign` from `exprStmt` needs two
+  tokens of lookahead -- fine for hand-written recursive descent, fatal for
+  a genuine single-token LL(1) table. `app/samples.py`'s `MINILANG_GRAMMAR`
+  applies **left factoring** (Aho et al., section 4.3.4) to `stmt`, plus a
+  second, smaller transformation (`unaryNoId`/`primaryNoId`, cloning two
+  grammar levels with the `ident`-leading alternative removed) to stop
+  `exprStmt`'s own expression chain from silently reintroducing the
+  collision the factoring had just removed. Verified conflict-free by
+  actually building the LL(1) table (`tests/test_grammar.py
+  ::test_minilang_full_grammar_is_ll1`), not just reasoned about on paper,
+  and cross-validated against every program in `tests/programs/` parsing
+  identically under both parsers.
+* **A real, two-layer bug surfaced building the API adapter, not the
+  parser.** Table-driven parsing is iterative (Algorithm 4.4 has no call
+  stack), so it has no trouble at all accepting an expression nested
+  hundreds of parentheses deep -- the exact input `app/parser.py`
+  deliberately rejects via `MAX_NESTING_DEPTH`. The first version of
+  `_table_tree_to_api` was written recursively anyway and hit Python's own
+  recursion limit converting the resulting tree; fixed to convert
+  iteratively, with an explicit stack. That fix then exposed a second,
+  unrelated ceiling underneath it: `pydantic-core`'s JSON serializer
+  refuses a self-referential model (`TreeNode.children: list[TreeNode]`)
+  nested much past roughly 95-100 levels, confirmed by direct measurement
+  to be a hard-coded limit entirely unaffected by
+  `sys.setrecursionlimit`. `app/table_parser.py` now enforces its own
+  `_MAX_STACK_DEPTH` (64, empirically calibrated by round-tripping the
+  deepest parse it still accepts through `TreeNode.model_dump_json`
+  directly) for exactly this reason -- not because the algorithm needs it,
+  but because the response it feeds into does.
+* **The concrete parse tree is a genuinely different artefact from the
+  AST, not a relabelling of it.** `app.ast_nodes` deliberately collapses
+  grammar scaffolding that exists only to keep a grammar parseable --
+  exactly the `Tail` nonterminals this grammar is full of. The parse tree
+  keeps all of it (including an explicit `ε` leaf for every empty
+  production), which is the whole pedagogical point: a reader can see the
+  derivation the table actually performed, not a simplified summary of it.
+  Pinned directly: `tests/test_table_parser.py
+  ::test_tree_shape_differs_from_the_ast_envelope`.
+* **The Syntax tab gained an "Abstract syntax tree" / "Step-through parse"
+  sub-view toggle** (the same `.seg-toggle` pattern already used by the ICG
+  and Parser Theory tabs) rather than replacing the AST view or stacking
+  both trees at once. The step-through tree is a second `Viz.renderTree`
+  instance over the same adapter pattern used for the Parser Theory tab's
+  tables: `toVizShape()` maps `TreeNode` onto the AST envelope shape
+  `Viz.renderTree` already draws, and a new `setVisibleStep(stepIndex)`
+  method on the tree handle reveals nodes by toggling a CSS class rather
+  than re-laying out the tree on every Play/Step tick.

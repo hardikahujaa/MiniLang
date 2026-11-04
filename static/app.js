@@ -44,6 +44,24 @@ let treeHandle = null;
 /** The AST most recently returned by /compile, kept for re-rendering. */
 let lastAst = null;
 
+/** `CompileResponse.parseTree` (the table-driven parser's concrete tree). */
+let lastParseTree = null;
+
+/** `CompileResponse.parseTrace`, the step-by-step table-driven parse. */
+let lastParseTrace = [];
+
+/** Handle returned by Viz.renderTree for the step-through trace's own tree. */
+let traceTreeHandle = null;
+
+/** Which Syntax tab sub-view is showing: `"ast"` or `"trace"`. */
+let syntaxView = "ast";
+
+/** 0-based index of the step currently revealed in the trace animation. */
+let traceStep = 0;
+
+/** `setInterval` handle while the trace is auto-playing, else null. */
+let tracePlayTimer = null;
+
 /** `{tac, blocks, cfg}` from the most recent /compile, kept for re-rendering. */
 let lastIcg = null;
 
@@ -150,9 +168,12 @@ function activateTab(name) {
   // These measure their container, which is zero while hidden.
   if (name === "lexical") renderTokenWindow();
   if (name === "semantic") renderSymbolWindow();
-  if (name === "syntax" && lastAst && !treeHandle) {
+  if (name === "syntax" && syntaxView === "ast" && lastAst && !treeHandle) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
     applyEvalOrder();
+  }
+  if (name === "syntax" && syntaxView === "trace" && lastParseTree && !traceTreeHandle) {
+    renderTraceTree();
   }
   if (name === "icg") drawCfgIfVisible();
 }
@@ -1060,14 +1081,11 @@ function renderAst(ast) {
   lastAst = ast;
 
   const hasTree = Boolean(ast);
-  $("#syntax-empty").hidden = hasTree;
   $("#parse-tree-wrap").hidden = !hasTree;
-  $("#tree-toolbar").hidden = !hasTree;
 
   if (!hasTree) {
     treeHandle = null;
     window.Viz.clear("#parse-tree-wrap");
-    explainMissingTree();
     return;
   }
 
@@ -1076,10 +1094,207 @@ function renderAst(ast) {
     `<span><b>${stats.nodes}</b> nodes</span><span>depth <b>${stats.depth}</b></span>` +
     `<span><b>${ast.functionCount || 0}</b> functions</span>`;
 
-  if ($("#panel-syntax").classList.contains("is-active")) {
+  if (syntaxView === "ast" && $("#panel-syntax").classList.contains("is-active")) {
     treeHandle = window.Viz.renderTree("#parse-tree-wrap", ast);
     applyEvalOrder();
   }
+}
+
+/**
+ * Switch which Syntax tab sub-view is visible: the abstract syntax tree, or
+ * the table-driven parser's step-through trace.
+ *
+ * The AST-specific toolbar controls (expand/collapse/reset/eval-order) only
+ * make sense for the "ast" sub-view and are hidden for "trace", which has
+ * its own Play/Step/Reset controls instead.
+ *
+ * @param {string} name - "ast" or "trace".
+ * @returns {void}
+ */
+function activateSyntaxView(name) {
+  syntaxView = name;
+  $$('.seg-toggle[aria-label="Syntax view"] .seg-btn').forEach((btn) =>
+    btn.classList.toggle("is-active", btn.dataset.syntaxView === name)
+  );
+  $("#syntax-view-ast").hidden = name !== "ast";
+  $("#syntax-view-trace").hidden = name !== "trace";
+  $("#eval-order-toggle").hidden = name !== "ast";
+  $("#btn-tree-expand").hidden = name !== "ast";
+  $("#btn-tree-collapse").hidden = name !== "ast";
+  $("#btn-tree-reset").hidden = name !== "ast";
+
+  const panelActive = $("#panel-syntax").classList.contains("is-active");
+  if (panelActive && name === "ast" && lastAst && !treeHandle) {
+    treeHandle = window.Viz.renderTree("#parse-tree-wrap", lastAst);
+    applyEvalOrder();
+  }
+  if (panelActive && name === "trace" && lastParseTree && !traceTreeHandle) {
+    renderTraceTree();
+  }
+}
+
+/**
+ * Adapt a `TreeNode` (name/kind/value/line/col/step/children) into the
+ * shape `Viz.renderTree` expects -- the same node/detail/edge envelope the
+ * AST already uses. A pure data mapping, not a new renderer; `step` passes
+ * through unchanged, since D3 hierarchies tolerate extra data fields.
+ *
+ * @param {Object} node - A `CompileResponse.parseTree` node.
+ * @returns {Object} The equivalent AST-envelope-shaped node.
+ */
+function toVizShape(node) {
+  return {
+    node: node.name,
+    detail: node.value || "",
+    name: node.name,
+    kind: node.kind,
+    line: node.line,
+    column: node.col,
+    step: node.step,
+    edge: null,
+    children: (node.children || []).map(toVizShape),
+  };
+}
+
+/**
+ * Draw the step-through trace's own concrete parse tree, starting fully
+ * expanded (it keeps grammar scaffolding the AST collapses, so folding by
+ * node count the way the AST view does would hide exactly the nodes the
+ * animation is meant to show).
+ * @returns {void}
+ */
+function renderTraceTree() {
+  if (!lastParseTree) return;
+  traceTreeHandle = window.Viz.renderTree(
+    "#parse-trace-tree-wrap",
+    toVizShape(lastParseTree),
+    { collapsed: false }
+  );
+  if (traceTreeHandle) traceTreeHandle.setVisibleStep(traceStep);
+}
+
+/**
+ * Render the trace table: one row per step, step/stack/input/action --
+ * the same shape and `theory-table` styling the Parser Theory tab's own
+ * trace view already uses.
+ * @returns {void}
+ */
+function renderTraceTable() {
+  $("#trace-table-body").innerHTML = lastParseTrace
+    .map(
+      (step) =>
+        `<tr data-step="${step.step}">` +
+        `<td>${step.step}</td>` +
+        `<td><code>${esc((step.stack || []).join(" "))}</code></td>` +
+        `<td><code>${esc((step.input || []).join(" "))}</code></td>` +
+        `<td>${esc(step.action)}</td>` +
+        "</tr>"
+    )
+    .join("");
+}
+
+/**
+ * Reveal the trace tree and highlight the trace table up to one step.
+ * @param {number} index - 0-based step index to reveal.
+ * @returns {void}
+ */
+function setTraceStep(index) {
+  const last = Math.max(lastParseTrace.length - 1, 0);
+  traceStep = Math.max(0, Math.min(index, last));
+  $("#trace-slider").value = String(traceStep);
+  if (traceTreeHandle) traceTreeHandle.setVisibleStep(traceStep);
+
+  $$("#trace-table-body tr").forEach((row) => {
+    row.classList.toggle("is-current", Number(row.dataset.step) === traceStep);
+  });
+  const current = $(`#trace-table-body tr[data-step="${traceStep}"]`);
+  if (current) current.scrollIntoView({ block: "nearest" });
+
+  const action = (lastParseTrace[traceStep] || {}).action || "";
+  $("#trace-stats").innerHTML = `<span>step <b>${traceStep}</b> / ${last}</span><span>${esc(action)}</span>`;
+}
+
+/**
+ * Advance the trace by one step, stopping playback once the end is reached.
+ * @returns {void}
+ */
+function stepTrace() {
+  if (traceStep >= lastParseTrace.length - 1) {
+    pauseTrace();
+    return;
+  }
+  setTraceStep(traceStep + 1);
+}
+
+/**
+ * Stop auto-play, if it is running.
+ * @returns {void}
+ */
+function pauseTrace() {
+  if (tracePlayTimer) {
+    clearInterval(tracePlayTimer);
+    tracePlayTimer = null;
+  }
+  const button = $("#btn-trace-play");
+  if (button) button.textContent = "Play";
+}
+
+/**
+ * Start or stop auto-play, advancing one step every 400ms.
+ * @returns {void}
+ */
+function toggleTracePlay() {
+  if (tracePlayTimer) {
+    pauseTrace();
+    return;
+  }
+  if (traceStep >= lastParseTrace.length - 1) setTraceStep(0);
+  tracePlayTimer = setInterval(stepTrace, 400);
+  $("#btn-trace-play").textContent = "Pause";
+}
+
+/**
+ * Render the Syntax tab's step-through trace sub-view from a /compile result.
+ * @param {Object|null} parseTree - `CompileResponse.parseTree`.
+ * @param {Array<Object>} parseTrace - `CompileResponse.parseTrace`.
+ * @returns {void}
+ */
+function renderSyntaxTrace(parseTree, parseTrace) {
+  pauseTrace();
+  lastParseTree = parseTree || null;
+  lastParseTrace = parseTrace || [];
+  traceTreeHandle = null;
+  window.Viz.clear("#parse-trace-tree-wrap");
+  $("#parse-trace-tree-wrap").hidden = !lastParseTree;
+
+  renderTraceTable();
+  $("#trace-slider").max = String(Math.max(lastParseTrace.length - 1, 0));
+  setTraceStep(0);
+
+  if (syntaxView === "trace" && $("#panel-syntax").classList.contains("is-active")) {
+    renderTraceTree();
+  }
+}
+
+/**
+ * Reconcile the Syntax tab's shared empty-state and toolbar once both the
+ * AST and the trace have been rendered -- whichever of the two actually
+ * exists decides whether anything is shown at all, and which sub-view a
+ * fresh Build defaults to.
+ * @returns {void}
+ */
+function reconcileSyntaxTab() {
+  const hasAst = Boolean(lastAst);
+  const hasTrace = lastParseTrace.length > 0;
+  const hasAnything = hasAst || hasTrace;
+
+  $("#syntax-empty").hidden = hasAnything;
+  $("#tree-toolbar").hidden = !hasAnything;
+  if (!hasAnything) {
+    explainMissingTree();
+    return;
+  }
+  activateSyntaxView(hasAst ? "ast" : "trace");
 }
 
 /**
@@ -1092,6 +1307,8 @@ function renderResult(result) {
 
   renderTokens(result.tokens || []);
   renderAst(result.ast || null);
+  renderSyntaxTrace(result.parseTree || null, result.parseTrace || []);
+  reconcileSyntaxTab();
   renderSymbols(result.symbols || []);
   renderIcg(result.tac || [], result.blocks || [], result.cfg || null);
   renderOptimization(result.tac || [], result.optimized || null);
@@ -1451,6 +1668,22 @@ function init() {
   $$('.seg-toggle[aria-label="Parser Theory view"] .seg-btn').forEach((btn) =>
     btn.addEventListener("click", () => activateTheoryView(btn.dataset.theoryView))
   );
+  $$('.seg-toggle[aria-label="Syntax view"] .seg-btn').forEach((btn) =>
+    btn.addEventListener("click", () => activateSyntaxView(btn.dataset.syntaxView))
+  );
+  $("#btn-trace-play").addEventListener("click", toggleTracePlay);
+  $("#btn-trace-step").addEventListener("click", () => {
+    pauseTrace();
+    stepTrace();
+  });
+  $("#btn-trace-reset").addEventListener("click", () => {
+    pauseTrace();
+    setTraceStep(0);
+  });
+  $("#trace-slider").addEventListener("input", (e) => {
+    pauseTrace();
+    setTraceStep(Number(e.target.value));
+  });
   $("#btn-theory-analyze").addEventListener("click", analyzeGrammar);
   $("#btn-theory-load-expr").addEventListener("click", () => {
     $("#theory-grammar-input").value = demoGrammarText;

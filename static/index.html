@@ -238,7 +238,15 @@
         <div class="pane-toolbar" id="tree-toolbar" hidden>
           <div class="stat-row" id="tree-stats"></div>
           <div class="toolbar-spacer"></div>
-          <label class="toggle"
+          <div class="seg-toggle" role="tablist" aria-label="Syntax view">
+            <button class="seg-btn is-active" id="btn-syntax-ast" type="button" data-syntax-view="ast">
+              Abstract syntax tree
+            </button>
+            <button class="seg-btn" id="btn-syntax-trace" type="button" data-syntax-view="trace">
+              Step-through parse
+            </button>
+          </div>
+          <label class="toggle" id="eval-order-toggle"
                  title="Number each operator in the order it is evaluated, restarting per expression">
             <input type="checkbox" id="opt-eval-order" />
             <span>Evaluation order</span>
@@ -250,8 +258,28 @@
         <div class="empty-state" id="syntax-empty" data-step="press Build">
           <p>The parse tree renders here. Click a node to fold it, scroll to zoom, drag to pan.</p>
         </div>
-        <div id="parse-tree-wrap" class="tree-host" hidden></div>
-        <div id="parse-trace-wrap" hidden></div>
+
+        <div id="syntax-view-ast" class="syntax-view" hidden>
+          <div id="parse-tree-wrap" class="tree-host" hidden></div>
+        </div>
+
+        <div id="syntax-view-trace" class="syntax-view" hidden>
+          <div class="pane-toolbar">
+            <button class="btn btn-sm" id="btn-trace-play" type="button">Play</button>
+            <button class="btn btn-sm" id="btn-trace-step" type="button">Step</button>
+            <button class="btn btn-sm" id="btn-trace-reset" type="button">Reset</button>
+            <div class="stat-row" id="trace-stats"></div>
+            <div class="toolbar-spacer"></div>
+            <input type="range" id="trace-slider" class="trace-slider" min="0" max="0" value="0" />
+          </div>
+          <div id="parse-trace-tree-wrap" class="tree-host trace-tree-host" hidden></div>
+          <div class="theory-view trace-table-view">
+            <table class="theory-table">
+              <thead><tr><th>Step</th><th>Stack</th><th>Input</th><th>Action</th></tr></thead>
+              <tbody id="trace-table-body"></tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- ========================= 5. SEMANTIC ========================= -->

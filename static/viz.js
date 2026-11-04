@@ -368,7 +368,8 @@ const Viz = (() => {
    * @param {boolean} [options.collapsed] - Force folding on or off. Omitted,
    *   a large tree folds itself and a small one opens fully.
    * @returns {Object|null} A handle exposing `expandAll`, `collapseAll`,
-   *   `resetView` and `setEvalOrder`, or null if nothing could be drawn.
+   *   `resetView`, `setEvalOrder` and `setVisibleStep`, or null if nothing
+   *   could be drawn.
    */
   function renderTree(selector, data, options) {
     const settings = options || {};
@@ -735,6 +736,29 @@ const Viz = (() => {
        */
       setEvalOrder(on) {
         svg.classed("show-eval", Boolean(on));
+      },
+
+      /**
+       * Show only the nodes (and the edges leading to them) created at or
+       * before `stepIndex` in a step-through parse trace.
+       *
+       * A CSS class toggle on the already-laid-out selections, not a
+       * redraw -- cheap enough to call on every Play/Step tick of the
+       * Syntax tab's animation. A node with no `step` in its data (an AST
+       * drawn without a trace, for instance) is always shown.
+       *
+       * @param {number} stepIndex - The highest step currently revealed.
+       * @returns {void}
+       */
+      setVisibleStep(stepIndex) {
+        const hidden = (step) => typeof step === "number" && step > stepIndex;
+        nodeLayer.selectAll("g.tree-node").classed("step-hidden", (d) => hidden(d.data.step));
+        linkLayer
+          .selectAll("path.tree-link")
+          .classed("step-hidden", (d) => hidden(d.target.data.step));
+        labelLayer
+          .selectAll("text.tree-edge-label")
+          .classed("step-hidden", (d) => hidden(d.target.data.step));
       },
 
       resetView: resetView,

@@ -43,7 +43,7 @@ from app.grammar import (
     run_lr_parse,
     trace_lr_parse,
 )
-from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR
+from app.samples import AMBIGUOUS_GRAMMAR, DEMO_GRAMMAR, MINILANG_GRAMMAR
 
 # ---------------------------------------------------------------------------
 # The book's own non-left-recursive expression grammar (section 4.4),
@@ -266,6 +266,20 @@ class TestLl1Table:
         primary    -> NUM | ID | true | false | lparen expr rparen
         """
         analysis = analyse(minilang_expr, start_symbol="expr")
+        assert analysis.ll1.is_ll1, analysis.ll1.conflicts
+
+    def test_minilang_full_grammar_is_ll1(self) -> None:
+        """Confirm the full, left-factored MiniLang grammar is LL(1).
+
+        :data:`app.samples.MINILANG_GRAMMAR` is what `app/table_parser.py`
+        builds its predictive-parsing table from; its own docstring carries
+        the left-factoring rationale (Aho et al. section 4.3.4) for `stmt`'s
+        `assign`-vs-`exprStmt` ambiguity. This is the permanent regression
+        guard: if a future edit ever reintroduces a conflict, this fails
+        here rather than surfacing as a silently wrong table at runtime --
+        app/table_parser.py itself also asserts this at import time.
+        """
+        analysis = analyse(MINILANG_GRAMMAR, start_symbol="program")
         assert analysis.ll1.is_ll1, analysis.ll1.conflicts
 
 

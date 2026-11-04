@@ -127,7 +127,7 @@ class TestValidation:
 class TestTreeNode:
     """The recursive tree shape D3 consumes."""
 
-    def test_nests_arbitrarily_deep(self):
+    def test_nests_several_levels_deep(self):
         leaf = TreeNode(name="id", kind="terminal", value="n")
         tree = TreeNode(name="expr", children=[TreeNode(name="term", children=[leaf])])
         assert tree.children[0].children[0].value == "n"
@@ -141,3 +141,30 @@ class TestTreeNode:
         original = TreeNode(name="E", children=[TreeNode(name="T", value="id", line=1, col=1)])
         restored = TreeNode.model_validate_json(original.model_dump_json(by_alias=True))
         assert restored == original
+
+    def test_step_field_round_trips_and_defaults_to_none(self):
+        bare = TreeNode(name="E")
+        assert bare.step is None
+        stamped = TreeNode(name="E", step=7)
+        restored = TreeNode.model_validate_json(stamped.model_dump_json(by_alias=True))
+        assert restored.step == 7
+
+    def test_is_not_actually_arbitrarily_deep(self):
+        """Regression guard for a real pydantic-core limitation.
+
+        Despite ``children: list[TreeNode]`` looking like it should nest to
+        any depth, pydantic-core's serializer refuses a self-referential
+        model nested much past roughly 95-100 levels with "Circular
+        reference detected (depth exceeded)" -- a hard-coded limit,
+        confirmed (while building app/table_parser.py) to be entirely
+        unaffected by ``sys.setrecursionlimit``. 80 levels is comfortably
+        below that ceiling; this is what
+        ``app.table_parser._MAX_STACK_DEPTH`` is calibrated against, and
+        this test is what would catch it if a future pydantic upgrade moved
+        the ceiling down far enough to make that calibration wrong.
+        """
+        node = TreeNode(name="leaf", kind="terminal")
+        for i in range(80):
+            node = TreeNode(name=f"n{i}", kind="nonterminal", children=[node])
+        serialized = node.model_dump_json()
+        assert serialized  # did not raise

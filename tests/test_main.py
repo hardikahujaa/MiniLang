@@ -515,7 +515,16 @@ class TestSemanticAnalysis:
     def test_semantic_timing_is_recorded(self, client: TestClient, demo_source: str):
         body = client.post("/compile", json={"source": demo_source}).json()
         phases = [t["phase"] for t in body["meta"]["timings"]]
-        assert phases == ["lexer", "parser", "semantic", "tac", "optimize", "codegen", "total"]
+        assert phases == [
+            "lexer",
+            "parser",
+            "table_parser",
+            "semantic",
+            "tac",
+            "optimize",
+            "codegen",
+            "total",
+        ]
 
     def test_type_errors_are_reported_with_positions(self, client: TestClient):
         body = client.post("/compile", json={"source": "func m(): void { int x = 1.5; }"}).json()

@@ -910,7 +910,24 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .tree-host:active { cursor: grabbing; }
 
+.syntax-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.trace-tree-host { flex: 1 1 55%; min-height: 0; }
+.trace-table-view { flex: 1 1 45%; min-height: 0; overflow-y: auto; }
+
+.trace-slider { flex: 0 1 220px; accent-color: var(--accent); }
+
+#trace-table-body tr.is-current { background: var(--bg-hover); }
+#trace-table-body tr.is-current td:first-child {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .tree-svg { display: block; }
+
+/* Step-through parse animation: a node/link/label not yet reached by the
+   current playback step, per Viz.renderTree's setVisibleStep. */
+.step-hidden { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
 
 .tree-link {
   fill: none;

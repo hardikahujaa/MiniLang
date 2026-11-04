@@ -60,8 +60,10 @@ from app.schemas import (
     PhaseTiming,
     RunRequest,
     RunResponse,
+    TreeNode,
 )
 from app.semantic import analyse
+from app.table_parser import ParseTreeNode, trace_table_parse
 from app.tac import generate as generate_tac
 from app.vm import find_entry
 from app.vm import run as run_vm
@@ -217,6 +219,45 @@ async def demo() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _table_tree_to_api(root: ParseTreeNode) -> TreeNode:
+    """Adapt a :mod:`app.table_parser` concrete parse tree into the wire shape.
+
+    Converts iteratively, with an explicit stack, rather than by Python call
+    recursion. This matters: the table-driven parser itself is Algorithm 4.4's
+    iterative stack-based driver, so -- unlike recursive descent -- it has no
+    inherent nesting-depth limit, and a pathologically nested but otherwise
+    valid expression can produce a tree many hundreds of levels deep. A
+    recursive version of this function would defeat that advantage by hitting
+    Python's own recursion limit on exactly the input the parser itself
+    handled without trouble.
+
+    Args:
+        root: The root of a tree from :func:`app.table_parser.trace_table_parse`.
+
+    Returns:
+        The equivalent :class:`~app.schemas.TreeNode` tree.
+    """
+    converted: dict[int, TreeNode] = {}
+    work: list[tuple[ParseTreeNode, bool]] = [(root, False)]
+    while work:
+        node, children_converted = work.pop()
+        if not children_converted:
+            work.append((node, True))
+            for child in reversed(node.children):
+                work.append((child, False))
+            continue
+        converted[id(node)] = TreeNode(
+            name=node.symbol,
+            kind=node.kind,
+            value=node.value,
+            line=node.line,
+            col=node.col,
+            step=node.step,
+            children=[converted.pop(id(child)) for child in node.children],
+        )
+    return converted[id(root)]
+
+
 @app.post("/compile", response_model=CompileResponse, tags=["pipeline"])
 async def compile_source(request: CompileRequest) -> CompileResponse:
     """Compile MiniLang source and return every phase's artefacts.
@@ -281,6 +322,23 @@ async def compile_source(request: CompileRequest) -> CompileResponse:
         function_count = len(program.functions)
     parse_ms = (time.perf_counter() - parse_started) * 1000.0
     response.meta.timings.append(PhaseTiming(phase="parser", ms=round(parse_ms, 3)))
+
+    # --- Phase 2b: table-driven parse trace (Tier B item 9) -------------
+    # A second, independent parse of the same token stream, over
+    # app.table_parser's own LL(1) table -- never raises, so this runs
+    # regardless of whether the recursive-descent parse above succeeded,
+    # and has no effect on `meta.ok`/`reached_phase`: it is purely additive,
+    # populating the two CompileResponse fields (`parseTrace`, `parseTree`)
+    # the schema already reserved for exactly this.
+    table_started = time.perf_counter()
+    table_result = trace_table_parse(lex_result.tokens)
+    table_ms = (time.perf_counter() - table_started) * 1000.0
+    response.parse_trace = [
+        ParseStep(step=s.step, stack=list(s.stack), input=list(s.input), action=s.action)
+        for s in table_result.steps
+    ]
+    response.parse_tree = _table_tree_to_api(table_result.tree)
+    response.meta.timings.append(PhaseTiming(phase="table_parser", ms=round(table_ms, 3)))
 
     # --- Phase 3: semantic analysis ------------------------------------
     # Only runs when the parser produced a tree: there is nothing to resolve

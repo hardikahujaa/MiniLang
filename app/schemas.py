@@ -94,6 +94,10 @@ class TreeNode(ApiModel):
     value: str | None = Field(default=None, description="Literal or identifier text, if any.")
     line: int | None = None
     col: int | None = None
+    step: int | None = Field(
+        default=None,
+        description="Trace step at which this node was first pushed; None for trees with no step axis.",
+    )
     children: list[TreeNode] = Field(default_factory=list)
 
 
