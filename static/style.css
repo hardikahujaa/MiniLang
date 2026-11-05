@@ -332,6 +332,48 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .tab.is-active .tab-num { background: var(--accent-deep); color: #fff; }
 
+.tab-rules-popover {
+  /* Fixed, not absolute: positioned from getBoundingClientRect() in app.js.
+     .tabstrip clips vertical overflow for its horizontal scrollbar, so an
+     absolutely-positioned child anchored inside it would be cut off. */
+  position: fixed;
+  z-index: 60;
+  width: 320px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg);
+  pointer-events: none;
+}
+
+.tab-rules-head {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0 0 6px;
+  color: var(--fg);
+}
+
+.tab-rules-lead { margin: 0 0 8px; color: var(--fg-muted); }
+
+.tab-rules-list { margin: 0 0 8px; padding-left: 18px; }
+.tab-rules-list li { margin-bottom: 4px; }
+.tab-rules-list li::marker { color: var(--fg-faint); }
+
+.tab-rules-src {
+  margin: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-style: italic;
+}
+
 /* ------------------------------- 7. Panels ------------------------------- */
 .panels {
   flex: 1 1 auto;

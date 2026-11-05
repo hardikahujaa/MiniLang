@@ -274,6 +274,73 @@ class TestTabTooltips:
         assert fragment in match.group(1)
 
 
+#: The seven pipeline tabs the textbook-rule popover covers. "theory" (Parser
+#: Theory) is deliberately excluded -- it is a separate module that accepts
+#: any grammar, not one of the seven compilation phases.
+PHASE_RULE_TABS = ["source", "lexical", "syntax", "semantic", "icg", "optimization", "target"]
+
+
+class TestPhaseRulesPopover:
+    """Every pipeline tab explains its textbook rule on hover, in plain language."""
+
+    def _phase_rules_object(self) -> str:
+        match = re.search(r"const PHASE_RULES = \{(.*?)\n\};", APP_JS, re.DOTALL)
+        assert match, "PHASE_RULES object not found in app.js"
+        return match.group(1)
+
+    def test_popover_surface_exists_in_markup(self):
+        assert 'id="tab-rules-popover"' in INDEX_HTML
+
+    def test_popover_is_hidden_until_shown(self):
+        assert re.search(r'id="tab-rules-popover"[^>]*\bhidden\b', INDEX_HTML)
+
+    @pytest.mark.parametrize("tab", PHASE_RULE_TABS)
+    def test_every_pipeline_tab_has_a_rules_entry(self, tab: str):
+        body = self._phase_rules_object()
+        assert re.search(rf"\b{tab}:\s*\{{", body), f"no PHASE_RULES entry for '{tab}'"
+
+    def test_theory_tab_is_not_in_phase_rules(self):
+        """Parser Theory keeps its own 'press Analyze' tooltip; it is not one of the seven."""
+        body = self._phase_rules_object()
+        assert not re.search(r"\btheory:\s*\{", body)
+
+    @pytest.mark.parametrize("tab", PHASE_RULE_TABS)
+    def test_every_entry_has_a_non_trivial_rule_and_bullets(self, tab: str):
+        body = self._phase_rules_object()
+        entry_match = re.search(rf"{tab}:\s*\{{(.*?)\n  \}},", body, re.DOTALL)
+        assert entry_match, f"could not isolate the '{tab}' entry"
+        entry = entry_match.group(1)
+        assert "rule:" in entry
+        assert "bullets:" in entry
+        assert len(re.findall(r'"\s*,?\s*\n', entry)) >= 2
+
+    def test_six_of_seven_entries_cite_the_textbook(self):
+        """Only 'source' has no formal textbook chapter -- it isn't a phase at all."""
+        body = self._phase_rules_object()
+        citations = re.findall(r'source:\s*"(Dragon Book[^"]*)"', body)
+        assert len(citations) == 6
+
+    def test_rules_show_on_hover_and_hide_on_leave(self):
+        assert 'tab.addEventListener("mouseenter", () => showPhaseRules(tab))' in APP_JS
+        assert 'tab.addEventListener("mouseleave", hidePhaseRules)' in APP_JS
+
+    def test_rules_are_also_reachable_by_keyboard(self):
+        """A mouse-only tooltip is invisible to keyboard/screen-reader users."""
+        assert 'tab.addEventListener("focus", () => showPhaseRules(tab))' in APP_JS
+        assert 'tab.addEventListener("blur", hidePhaseRules)' in APP_JS
+
+    def test_popover_positioning_uses_bounding_rect_not_absolute_layout(self):
+        """Verify the popover escapes .tabstrip's vertical-overflow clipping.
+
+        Only a viewport-relative fixed popover, positioned from the hovered
+        tab's own bounding rect, can do that.
+        """
+        assert "getBoundingClientRect()" in APP_JS
+        assert ".tab-rules-popover {" in STYLE_CSS
+        rule = re.search(r"\.tab-rules-popover\s*\{([^}]*)\}", STYLE_CSS, re.DOTALL)
+        assert rule and "position: fixed" in rule.group(1)
+
+
 class TestParseTreeContract:
     """The Syntax tab's renderer and its container must agree."""
 

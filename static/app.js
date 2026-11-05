@@ -188,6 +188,148 @@ function activateOutTab(name) {
   $$(".out-view").forEach((view) => view.classList.toggle("is-active", view.id === `out-${name}`));
 }
 
+/**
+ * The textbook rule behind each of the seven pipeline tabs, in plain
+ * language. "Parser Theory" is a separate module (any grammar, not just
+ * MiniLang's own), not one of the seven compilation phases, so it keeps
+ * only its existing `title` hint and has no entry here.
+ *
+ * Each `source` line names the Dragon Book (Aho, Lam, Sethi & Ullman,
+ * *Compilers: Principles, Techniques, and Tools*, 2nd ed.) chapter the rule
+ * comes from, at chapter granularity only -- precise enough to be checkable,
+ * not so precise it claims a section number nobody re-verified here.
+ */
+const PHASE_RULES = {
+  source: {
+    title: "Source — your program, unread",
+    rule:
+      "Nothing has been looked at yet. A compiler never understands a whole " +
+      "program in one go — it passes the text through a fixed sequence of " +
+      "stages, each adding a bit more understanding. Every other tab shows " +
+      "what one of those stages discovered.",
+    bullets: [
+      "This is exactly what you typed, character for character.",
+      "Lexical analysis, next, is the first stage that actually reads it.",
+    ],
+    source: "",
+  },
+  lexical: {
+    title: "Lexical analysis — turning characters into words",
+    rule:
+      "The compiler scans the source one character at a time and groups " +
+      "characters into the smallest meaningful pieces, called tokens — a " +
+      "number, a name, a keyword, or a symbol like ';' or '+'.",
+    bullets: [
+      "Letters and digits glue together into one token (‘total’ is one name, not five letters).",
+      "Keywords such as if, while and func are recognised by exact spelling.",
+      "Longest-match rule: the scanner always keeps reading as long as the result is still a valid token — so '==' becomes one token, never two separate '=' tokens.",
+      "Spaces, comments and layout are thrown away here; they never reach the next stage.",
+    ],
+    source: "Dragon Book, Ch. 3 — Lexical Analysis",
+  },
+  syntax: {
+    title: "Syntax analysis — checking the grammar",
+    rule:
+      "Just like English sentences follow grammar rules, this language has " +
+      "rules for what a valid statement looks like. The parser reads the " +
+      "token list left to right and matches it against those rules, " +
+      "building a tree that shows how the pieces fit together.",
+    bullets: [
+      "Every grammar rule says: a thing of this kind looks like these parts, in this order.",
+      "The parser tries rules top-down, picking the one the next token allows.",
+      "If no rule matches at some point, that is a syntax error, reported with its exact line and column.",
+      "This project does not stop at the first mistake: it skips ahead to a safe restart point and keeps checking, so you see every mistake in one pass.",
+    ],
+    source: "Dragon Book, Ch. 4 — Syntax Analysis",
+  },
+  semantic: {
+    title: "Semantic analysis — checking that it makes sense",
+    rule:
+      "A sentence can be grammatically perfect and still meaningless. This " +
+      "stage checks meaning: is every name declared before it is used, is " +
+      "it visible from here, and do the types actually match?",
+    bullets: [
+      "A symbol table is built: a lookup list of every name, its type, and where it is allowed to be used.",
+      "Each block (inside { }) gets its own scope, so a name inside one function cannot leak into another.",
+      "Type rules are checked — you cannot add a number to a bool, or call something that is not a function.",
+      "Every error caught here still has perfectly correct grammar; it is wrong only in meaning.",
+    ],
+    source: "Dragon Book, Ch. 6 — Type Checking",
+  },
+  icg: {
+    title: "Intermediate code — one simple instruction at a time",
+    rule:
+      "Real machine instructions are too detailed to simplify comfortably, " +
+      "and the parse tree is too abstract to run directly. So the program " +
+      "is rewritten into three-address code: tiny instructions that each " +
+      "do exactly one operation, such as t1 = a + b.",
+    bullets: [
+      "Every instruction has at most one operator and one result — nothing nested.",
+      "Instructions are grouped into basic blocks: straight runs of code with one way in and one way out, no jumps in the middle.",
+      "Blocks are linked into a control-flow graph showing which block can run after which — what the optimiser studies next.",
+    ],
+    source: "Dragon Book, Ch. 6 — Intermediate-Code Generation",
+  },
+  optimization: {
+    title: "Optimisation — faster, without changing the answer",
+    rule:
+      "A handful of simple, mechanical rewrites are applied again and again " +
+      "until nothing changes. Each one is only used where it is provably " +
+      "safe — the program must still compute exactly the same result.",
+    bullets: [
+      "Constant folding: '3 + 4' becomes '7' once, instead of being recomputed every time.",
+      "Constant propagation: once a variable's value is fixed and known, later uses of it are replaced by that value.",
+      "Common-subexpression elimination: the same calculation appearing twice with nothing changing in between is computed once and reused.",
+      "Dead-code elimination: any instruction whose result is never actually used is deleted.",
+    ],
+    source: "Dragon Book, Ch. 9 — Machine-Independent Optimizations",
+  },
+  target: {
+    title: "Code generation — producing runnable instructions",
+    rule:
+      "Each simplified instruction is translated into real instructions " +
+      "for a machine. This project targets a stack machine: instead of " +
+      "named registers, values are pushed onto and popped off a stack to " +
+      "do arithmetic.",
+    bullets: [
+      "'a + b' becomes: push a, push b, add — the result is left on top of the stack.",
+      "Every function call gets its own stack frame: a private slice of memory for that call's local variables and its return address.",
+      "Because each call has its own frame, a function can safely call itself (recursion) without mixing up variables between calls.",
+    ],
+    source: "Dragon Book, Ch. 8 — Code Generation",
+  },
+};
+
+/**
+ * Show the plain-language rule popover for one phase tab, anchored below it.
+ * @param {Element} tab - The tab button being hovered or focused.
+ * @returns {void}
+ */
+function showPhaseRules(tab) {
+  const info = PHASE_RULES[tab.dataset.tab];
+  if (!info) return;
+  const popover = $("#tab-rules-popover");
+  popover.innerHTML =
+    `<p class="tab-rules-head">${esc(info.title)}</p>` +
+    `<p class="tab-rules-lead">${esc(info.rule)}</p>` +
+    `<ul class="tab-rules-list">${info.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` +
+    (info.source ? `<p class="tab-rules-src">${esc(info.source)}</p>` : "");
+
+  const rect = tab.getBoundingClientRect();
+  popover.hidden = false;
+  const maxLeft = window.innerWidth - popover.offsetWidth - 12;
+  popover.style.left = `${Math.max(12, Math.min(rect.left, maxLeft))}px`;
+  popover.style.top = `${rect.bottom + 6}px`;
+}
+
+/**
+ * Hide the phase-rule popover.
+ * @returns {void}
+ */
+function hidePhaseRules() {
+  $("#tab-rules-popover").hidden = true;
+}
+
 /* -------------------------------------------------------------------------
    Token table (windowed)
    ------------------------------------------------------------------------- */
@@ -1641,9 +1783,13 @@ function init() {
     },
   });
 
-  $$(".tab").forEach((tab) =>
-    tab.addEventListener("click", () => activateTab(tab.dataset.tab))
-  );
+  $$(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+    tab.addEventListener("mouseenter", () => showPhaseRules(tab));
+    tab.addEventListener("mouseleave", hidePhaseRules);
+    tab.addEventListener("focus", () => showPhaseRules(tab));
+    tab.addEventListener("blur", hidePhaseRules);
+  });
   $$(".out-tab").forEach((tab) =>
     tab.addEventListener("click", () => activateOutTab(tab.dataset.out))
   );
